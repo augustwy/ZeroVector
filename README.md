@@ -31,13 +31,32 @@ ZeroVector 采用语义树结构组织文档，每个节点代表一个语义单
 2. **Phase 2: LLM 语义决策** - 基于语义理解选择路径
 3. **Phase 3: 文档内容读取** - 从 mmap 文件读取完整内容
 
-### 核心组件
+### 项目结构
+
+```
+ZeroVector/
+├── data/                          # 数据存储目录（运行时生成）
+│   └── zerovector_storage/        # ZeroVector数据文件
+│       ├── zerovector_storage.tree      # 语义树文件
+│       ├── zerovector_storage_shards/   # 分片存储目录
+│       ├── zerovector_storage.dict     # 关键词字典文件
+│       ├── zerovector_storage_docs/    # 文档副本目录
+│       ├── zerovector_storage.store    # 文档存储文件
+│       └── zerovector_storage.index    # 索引文件
+├── zerovector-core/               # 核心模块
+├── zerovector-spring-boot-starter/  # Spring Boot Starter
+├── zerovector-spring-boot-example/  # 示例应用
+└── zerovector-app/                # 独立应用
+```
+
+## 核心组件
 
 - **MMapDocumentStore** - 基于 mmap 的高性能存储引擎，零拷贝读取
 - **HybridNavigator** - 混合导航器，结合关键词和语义推理
 - **KeywordDictionary** - 关键词倒排索引，解决专有名词识别问题
 - **TreeBuilder** - 语义树构建器，使用虚拟线程并发处理
 - **ShardedTreeStorage** - 分片存储引擎，按需加载
+- **CachedLLMService** - LLM调用缓存层，减少API调用
 
 ## 快速开始
 
@@ -66,7 +85,7 @@ mvn spring-boot:run
 ```java
 // 创建语义树服务
 LLMService llmService = new YourLLMService();
-Path storagePath = Paths.get("./storage.bin");
+Path storagePath = Paths.get("./data/zerovector_storage");
 SemanticTreeService service = new SemanticTreeService(llmService, storagePath);
 
 // 初始化
