@@ -75,7 +75,7 @@ public class DesignPatternsDocumentTest {
 
         // 2. 测试查询功能
         // 测试查询创建型模式
-        ZeroVectorService.SearchResult result1 = zeroVectorService.search("一把好剪刀有什么特质");
+        ZeroVectorService.SearchResult result1 = zeroVectorService.search("什么是单例模式");
         List<NavigationPath> path = result1.path();
         System.out.println("查询'什么是单例模式'的导航路径: " + path);
     }
