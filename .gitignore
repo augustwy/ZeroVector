@@ -2,19 +2,48 @@ target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-.kotlin
 
-### IntelliJ IDEA ###
+### Maven ###
+.mvn/
+mvnw
+mvnw.cmd
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.m2/repository/
+
+### Java ###
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+
+### Logs ###
+*.log
+*.log.*
+logs/
+
+### IDE ###
+.trae/
+.idea/
+*.iws
+*.iml
+*.ipr
 .idea/modules.xml
 .idea/jarRepositories.xml
 .idea/compiler.xml
 .idea/libraries/
-*.iws
-*.iml
-*.ipr
-.idea/
-
-### Eclipse ###
+.vscode/
+.eclipse/
 .apt_generated
 .classpath
 .factorypath
@@ -22,9 +51,7 @@ target/
 .settings
 .springBeans
 .sts4-cache
-
-### NetBeans ###
-/nbproject/private/
+.nbproject/private/
 /nbbuild/
 /dist/
 /nbdist/
@@ -33,8 +60,36 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
-### VS Code ###
-.vscode/
-
-### Mac OS ###
+### OS ###
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+### Temporary Files ###
+*.tmp
+*.temp
+*.swp
+*~
+*.bak
+*.orig
+
+### ZeroVector Specific ###
+data/
+zerovector_storage/
+*.tree
+*.index
+*.store
+*.dict
+
+### Test Coverage ###
+.jacoco/
+jacoco.exec
+.coverage
+coverage.xml
+
+### Other ###
+.kotlin

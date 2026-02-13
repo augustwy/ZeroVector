@@ -11,7 +11,7 @@ spring:
 # ZeroVector配置
 zerovector:
   enabled: true
-  storage-path: ./zerovector_storage
+  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100
   model:

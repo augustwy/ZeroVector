@@ -5,8 +5,10 @@ import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 /**
@@ -14,35 +16,41 @@ import java.util.stream.Collectors;
  * 基于用户查询在语义树中进行导航，找到相关文档
  */
 public class Navigator {
+    private static final int MAX_NAVIGATION_HISTORY = 100;
+    
     private final SemanticTree semanticTree;
     private final LLMService llmService;
     private final MMapDocumentStore documentStore;
     
-    // 当前导航状态
     private TreeNode currentNode;
-    private List<NavigationPath> navigationHistory;
+    private final List<NavigationPath> navigationHistory;
     
     public Navigator(SemanticTree semanticTree, LLMService llmService, MMapDocumentStore documentStore) {
         this.semanticTree = semanticTree;
         this.llmService = llmService;
         this.documentStore = documentStore;
         this.currentNode = semanticTree.rootNode();
-        this.navigationHistory = new ArrayList<>();
+        this.navigationHistory = new CopyOnWriteArrayList<>();
+    }
+    
+    private void addNavigationPath(NavigationPath path) {
+        navigationHistory.add(path);
+        if (navigationHistory.size() > MAX_NAVIGATION_HISTORY) {
+            navigationHistory.remove(0);
+        }
     }
     
     /**
      * 执行查询导航
      */
     public NavigationResult navigate(String query) {
-        // 记录导航开始
         NavigationPath path = new NavigationPath(
             query,
             List.of(currentNode.id()),
             "Starting navigation from root"
         );
-        navigationHistory.add(path);
+        addNavigationPath(path);
         
-        // 执行导航逻辑
         return navigateRecursive(query, currentNode, 0);
     }
     
@@ -125,7 +133,7 @@ public class Navigator {
                 List<String> previousNodes = navigationHistory.get(navigationHistory.size() - 1).visitedNodes();
                 List<String> newVisitedNodes = new ArrayList<>(previousNodes);
                 newVisitedNodes.add(nodeId);
-                navigationHistory.add(new NavigationPath(
+                addNavigationPath(new NavigationPath(
                     query,
                     newVisitedNodes,
                     reasoning

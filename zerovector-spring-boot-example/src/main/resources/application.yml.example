@@ -16,7 +16,7 @@ zerovector:
   enabled: true
   llm-provider: spring-ai
   reuse-spring-ai-config: true  # 复用Spring AI的配置
-  storage-path: ./zerovector_storage
+  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100
 
@@ -35,7 +35,7 @@ zerovector:
     api-key: ${OPENAI_API_KEY}
     api-url: https://api.openai.com
     temperature: 0.7
-  storage-path: ./zerovector_storage
+  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100
 
@@ -53,7 +53,7 @@ zerovector:
     api-url: https://api.openai.com
     temperature: 0.7
     timeout: 60
-  storage-path: ./zerovector_storage
+  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100
 
@@ -71,7 +71,7 @@ zerovector:
     chat-model: ali-qwen-turbo  # 阿里百炼模型
     api-key: ${ALI_API_KEY}      # 阿里云API密钥
     temperature: 0.7
-  storage-path: ./zerovector_storage
+  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100
   # 启用第三方模型提供商适配器
@@ -94,7 +94,7 @@ zerovector:
     chat-model: baidu-ernie-bot   # 百度文心模型
     api-key: ${BAIDU_API_KEY}     # 百度API密钥
     temperature: 0.7
-  storage-path: ./zerovector_storage
+  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100
 
@@ -112,6 +112,6 @@ zerovector:
     chat-model: zhipu-glm-4       # 智谱AI模型
     api-key: ${ZHIPU_API_KEY}     # 智谱API密钥
     temperature: 0.7
-  storage-path: ./zerovector_storage
+  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100

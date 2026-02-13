@@ -27,8 +27,15 @@ public final class KeywordDictionary {
      * 添加关键词条目
      */
     public void addEntry(String keyword, String nodeId, double weight) {
-        invertedIndex.computeIfAbsent(keyword.toLowerCase(), k -> new ArrayList<>()).add(nodeId);
-        keywordWeights.put(keyword.toLowerCase(), weight);
+        String key = keyword.toLowerCase();
+        invertedIndex.compute(key, (k, list) -> {
+            if (list == null) {
+                list = new ArrayList<>();
+            }
+            list.add(nodeId);
+            return list;
+        });
+        keywordWeights.put(key, weight);
     }
     
     /**

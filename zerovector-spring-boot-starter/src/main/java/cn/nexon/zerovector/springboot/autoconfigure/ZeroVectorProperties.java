@@ -1,52 +1,37 @@
 package cn.nexon.zerovector.springboot.autoconfigure;
 
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Max;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
 
-/**
- * ZeroVector Spring Boot 自动配置属性
- */
+import jakarta.validation.Valid;
+
 @ConfigurationProperties(prefix = "zerovector")
+@Validated
 public class ZeroVectorProperties {
     
-    /**
-     * 是否启用ZeroVector
-     */
+    private static final int MIN_SHARD_SIZE = 10;
+    private static final int MAX_SHARD_SIZE = 10000;
+    
     private boolean enabled = true;
     
-    /**
-     * 存储路径
-     */
-    private String storagePath = "./zerovector_storage";
+    @NotBlank
+    private String storagePath = "./data/zerovector_storage";
     
-    /**
-     * 是否使用分片存储
-     */
     private boolean useShardedStorage = true;
     
-    /**
-     * 分片大小（每个分片包含的节点/块数量）
-     */
     private int shardSize = 100;
     
-    /**
-     * Spring AI配置
-     */
     private SpringAi springAi = new SpringAi();
     
-    /**
-     * LangChain4j配置
-     */
     private LangChain4j langChain4j = new LangChain4j();
 
-    /**
-     * 模型配置
-     */
     private Model model = new Model("gpt-4o-mini", "gpt-4o", 0.7, -1);
 
-    /**
-     * 模型并发配置
-     */
+    @Valid
     private ConcurrencyProperties concurrency = new ConcurrencyProperties();
 
     public boolean isEnabled() {
@@ -78,6 +63,11 @@ public class ZeroVectorProperties {
     }
     
     public void setShardSize(int shardSize) {
+        if (shardSize < MIN_SHARD_SIZE || shardSize > MAX_SHARD_SIZE) {
+            throw new IllegalArgumentException(
+                String.format("shardSize must be between %d and %d, got: %d", 
+                    MIN_SHARD_SIZE, MAX_SHARD_SIZE, shardSize));
+        }
         this.shardSize = shardSize;
     }
     

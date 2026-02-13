@@ -6,6 +6,8 @@ import cn.nexon.zerovector.core.model.TreeNode;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,6 +15,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,16 +30,18 @@ public class ShardedTreeStorage implements AutoCloseable {
     private static final String METADATA_FILE = "metadata.json";
     private static final String NODE_PREFIX = "node_";
     private static final String CHUNK_PREFIX = "chunk_";
-    private static final int DEFAULT_SHARD_SIZE = 100; // 每个分片默认包含的节点/块数量
+    private static final int DEFAULT_SHARD_SIZE = 100;
+    private static final int MAX_NODE_CACHE_SIZE = 1000;
+    private static final int MAX_CHUNK_CACHE_SIZE = 5000;
+    private static final long CACHE_EXPIRE_AFTER_ACCESS_MINUTES = 30;
     private static final Logger logger = LoggerFactory.getLogger(ShardedTreeStorage.class);
     
     private final String storageDir;
     private final int shardSize;
     
-    // 运行时缓存
     private TreeNode rootNode;
-    private final Map<String, TreeNode> nodeCache = new ConcurrentHashMap<>();
-    private final Map<String, DocumentChunk> chunkCache = new ConcurrentHashMap<>();
+    private final Cache<String, TreeNode> nodeCache;
+    private final Cache<String, DocumentChunk> chunkCache;
     
     // 分片索引
     private final Map<String, String> nodeShards = new ConcurrentHashMap<>();
@@ -50,7 +55,16 @@ public class ShardedTreeStorage implements AutoCloseable {
         this.storageDir = storageDir;
         this.shardSize = shardSize;
         
-        // 确保存储目录存在
+        this.nodeCache = Caffeine.newBuilder()
+            .maximumSize(MAX_NODE_CACHE_SIZE)
+            .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
+            .build();
+        
+        this.chunkCache = Caffeine.newBuilder()
+            .maximumSize(MAX_CHUNK_CACHE_SIZE)
+            .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
+            .build();
+        
         try {
             Files.createDirectories(Paths.get(storageDir));
         } catch (IOException e) {
@@ -85,19 +99,13 @@ public class ShardedTreeStorage implements AutoCloseable {
      * 从分片文件加载语义树
      */
     public SemanticTree loadTree() throws IOException {
-        // 加载元数据
         if (!loadMetadata()) {
             return null;
         }
         
-        // 加载根节点
         loadRootNode();
         
-        // 按需加载节点和块（这里先全部加载，实际应用中可以实现懒加载）
-        loadAllNodes();
-        loadAllChunks();
-        
-        return new SemanticTree(rootNode, new HashMap<>(nodeCache), new HashMap<>(chunkCache));
+        return new SemanticTree(rootNode, new LazyNodeMap(this), new LazyChunkMap(this));
     }
     
     /**
@@ -144,42 +152,38 @@ public class ShardedTreeStorage implements AutoCloseable {
      * 获取节点（支持懒加载）
      */
     public TreeNode getNode(String nodeId) throws IOException {
-        // 先检查缓存
-        if (nodeCache.containsKey(nodeId)) {
-            return nodeCache.get(nodeId);
-        }
-        
-        // 检查是否在分片索引中
-        String shardFile = nodeShards.get(nodeId);
-        if (shardFile == null) {
-            return null;
-        }
-        
-        // 加载分片文件
-        loadNodeShard(shardFile);
-        
-        return nodeCache.get(nodeId);
+        return nodeCache.get(nodeId, key -> {
+            String shardFile = nodeShards.get(key);
+            if (shardFile == null) {
+                return null;
+            }
+            
+            try {
+                loadNodeShard(shardFile);
+                return nodeCache.getIfPresent(key);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to load node: " + key, e);
+            }
+        });
     }
     
     /**
      * 获取文档块（支持懒加载）
      */
     public DocumentChunk getChunk(String chunkId) throws IOException {
-        // 先检查缓存
-        if (chunkCache.containsKey(chunkId)) {
-            return chunkCache.get(chunkId);
-        }
-        
-        // 检查是否在分片索引中
-        String shardFile = chunkShards.get(chunkId);
-        if (shardFile == null) {
-            return null;
-        }
-        
-        // 加载分片文件
-        loadChunkShard(shardFile);
-        
-        return chunkCache.get(chunkId);
+        return chunkCache.get(chunkId, key -> {
+            String shardFile = chunkShards.get(key);
+            if (shardFile == null) {
+                return null;
+            }
+            
+            try {
+                loadChunkShard(shardFile);
+                return chunkCache.getIfPresent(key);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to load chunk: " + key, e);
+            }
+        });
     }
     
     /**
@@ -400,8 +404,15 @@ public class ShardedTreeStorage implements AutoCloseable {
     
     @Override
     public void close() throws IOException {
-        // 清空缓存
-        nodeCache.clear();
-        chunkCache.clear();
+        nodeCache.invalidateAll();
+        chunkCache.invalidateAll();
+    }
+    
+    public Map<String, String> getNodeShardIndex() {
+        return Collections.unmodifiableMap(nodeShards);
+    }
+    
+    public Map<String, String> getChunkShardIndex() {
+        return Collections.unmodifiableMap(chunkShards);
     }
 }

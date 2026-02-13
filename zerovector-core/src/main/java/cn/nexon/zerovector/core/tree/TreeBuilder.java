@@ -23,12 +23,13 @@ import java.util.stream.Collectors;
  */
 public class TreeBuilder {
     private static final Logger logger = LoggerFactory.getLogger(TreeBuilder.class);
+    private static final int CLUSTERING_THRESHOLD = 5;
     
     private final LLMService llm;
     private final KeywordDictionary dictionary;
     private final MMapDocumentStore store;
     private final ConcurrencyProperties concurrencyConfig;
-    private final Semaphore requestSemaphore; // 控制并发请求的信号量
+    private final Semaphore requestSemaphore;
 
     // 兼容旧构造函数
     public TreeBuilder(LLMService llm, KeywordDictionary dictionary, MMapDocumentStore store) {
@@ -217,20 +218,16 @@ public class TreeBuilder {
     private TreeBuildResult buildRecursiveWithNodes(String name, List<DocumentChunk> chunks) {
         Map<String, TreeNode> allNodes = new HashMap<>();
         
-        // 如果块数量小于阈值，尝试进一步聚类以确保内容相关性
-        if (chunks.size() <= 5) {
-            // 即使块数量少，也尝试聚类以确保内容相关性
+        if (chunks.size() <= CLUSTERING_THRESHOLD) {
             try {
                 List<NodeCategory> categories = llm.clusterChunks(chunks);
                 
-                // 如果聚类结果只有一个类别且包含所有块，或者聚类失败，则创建叶子节点
                 if (categories.size() == 1 && categories.get(0).getChunks().size() == chunks.size()) {
                     TreeNode leafNode = createLeafNode(name, chunks);
                     allNodes.put(leafNode.id(), leafNode);
                     return new TreeBuildResult(leafNode, allNodes);
                 }
                 
-                // 如果聚类产生了多个类别，即使块数量少，也继续递归构建
                 if (categories.size() > 1) {
                     List<String> childIds = new ArrayList<>();
                     List<TreeNode> childNodes = new ArrayList<>();
@@ -386,17 +383,14 @@ public class TreeBuilder {
      */
     private TreeNode buildRecursive(String name, List<DocumentChunk> chunks) {
         // 如果块数量小于阈值，尝试进一步聚类以确保内容相关性
-        if (chunks.size() <= 5) {
-            // 即使块数量少，也尝试聚类以确保内容相关性
+        if (chunks.size() <= CLUSTERING_THRESHOLD) {
             try {
                 List<NodeCategory> categories = llm.clusterChunks(chunks);
                 
-                // 如果聚类结果只有一个类别且包含所有块，或者聚类失败，则创建叶子节点
                 if (categories.size() == 1 && categories.get(0).getChunks().size() == chunks.size()) {
                     return createLeafNode(name, chunks);
                 }
                 
-                // 如果聚类产生了多个类别，即使块数量少，也继续递归构建
                 if (categories.size() > 1) {
                     List<String> childIds = new ArrayList<>();
                     for (NodeCategory cat : categories) {

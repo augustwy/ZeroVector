@@ -22,13 +22,8 @@ public class MD5Util {
      * @throws IOException 如果读取文件失败
      */
     public static String calculateMD5(Path filePath) throws IOException {
-        try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] fileBytes = Files.readAllBytes(filePath);
-            byte[] hashBytes = md.digest(fileBytes);
-            return bytesToHex(hashBytes);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("MD5算法不可用", e);
+        try (InputStream is = Files.newInputStream(filePath)) {
+            return calculateMD5(is);
         }
     }
     

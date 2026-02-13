@@ -2,29 +2,19 @@ package cn.nexon.zerovector.core.config;
 
 public class ConcurrencyProperties {
     
-    /**
-     * 最大并发请求数量
-     */
+    private static final int MIN_MAX_CONCURRENT_REQUESTS = 1;
+    private static final int MAX_MAX_CONCURRENT_REQUESTS = 100;
+    private static final double MIN_REQUESTS_PER_SECOND = 0.1;
+    private static final double MAX_REQUESTS_PER_SECOND = 100.0;
+    private static final int MIN_BATCH_SIZE = 1;
+    private static final int MAX_BATCH_SIZE = 1000;
+    private static final long MIN_BATCH_DELAY_MS = 0;
+    private static final long MAX_BATCH_DELAY_MS = 60000;
+    
     private int maxConcurrentRequests = 5;
-    
-    /**
-     * 每秒请求数限制（使用令牌桶算法）
-     */
     private double requestsPerSecond = 2.0;
-    
-    /**
-     * 批处理大小
-     */
     private int batchSize = 10;
-    
-    /**
-     * 批次间延迟（毫秒）
-     */
     private long batchDelayMs = 100;
-    
-    /**
-     * 是否启用批处理模式
-     */
     private boolean enableBatchProcessing = false;
     
     public int getMaxConcurrentRequests() {
@@ -32,6 +22,11 @@ public class ConcurrencyProperties {
     }
     
     public void setMaxConcurrentRequests(int maxConcurrentRequests) {
+        if (maxConcurrentRequests < MIN_MAX_CONCURRENT_REQUESTS || maxConcurrentRequests > MAX_MAX_CONCURRENT_REQUESTS) {
+            throw new IllegalArgumentException(
+                String.format("maxConcurrentRequests must be between %d and %d, got: %d", 
+                    MIN_MAX_CONCURRENT_REQUESTS, MAX_MAX_CONCURRENT_REQUESTS, maxConcurrentRequests));
+        }
         this.maxConcurrentRequests = maxConcurrentRequests;
     }
     
@@ -40,6 +35,11 @@ public class ConcurrencyProperties {
     }
     
     public void setRequestsPerSecond(double requestsPerSecond) {
+        if (requestsPerSecond < MIN_REQUESTS_PER_SECOND || requestsPerSecond > MAX_REQUESTS_PER_SECOND) {
+            throw new IllegalArgumentException(
+                String.format("requestsPerSecond must be between %.1f and %.1f, got: %.2f", 
+                    MIN_REQUESTS_PER_SECOND, MAX_REQUESTS_PER_SECOND, requestsPerSecond));
+        }
         this.requestsPerSecond = requestsPerSecond;
     }
     
@@ -48,6 +48,11 @@ public class ConcurrencyProperties {
     }
     
     public void setBatchSize(int batchSize) {
+        if (batchSize < MIN_BATCH_SIZE || batchSize > MAX_BATCH_SIZE) {
+            throw new IllegalArgumentException(
+                String.format("batchSize must be between %d and %d, got: %d", 
+                    MIN_BATCH_SIZE, MAX_BATCH_SIZE, batchSize));
+        }
         this.batchSize = batchSize;
     }
     
@@ -56,6 +61,11 @@ public class ConcurrencyProperties {
     }
     
     public void setBatchDelayMs(long batchDelayMs) {
+        if (batchDelayMs < MIN_BATCH_DELAY_MS || batchDelayMs > MAX_BATCH_DELAY_MS) {
+            throw new IllegalArgumentException(
+                String.format("batchDelayMs must be between %d and %d, got: %d", 
+                    MIN_BATCH_DELAY_MS, MAX_BATCH_DELAY_MS, batchDelayMs));
+        }
         this.batchDelayMs = batchDelayMs;
     }
     
