@@ -1,0 +1,29 @@
+spring:
+  ai:
+    model:
+      chat: openai
+    openai:
+      api-key: ${AI_OPENAI_API_KEY}
+      base-url: https://api.hunyuan.cloud.tencent.com/v1
+      chat:
+        completions-path: /chat/completions
+
+# ZeroVector配置
+zerovector:
+  enabled: true
+  storage-path: ./zerovector_storage
+  use-sharded-storage: true
+  shard-size: 100
+  model:
+    clustering: hunyuan-turbos-latest
+    navigation: hunyuan-turbos-latest
+  concurrency:
+    max-concurrent-requests: 1
+    requests-per-second: 1
+
+# 日志配置
+logging:
+  level:
+    cn.nexon.zerovector: DEBUG
+    org.springframework.beans.factory: INFO
+    org.springframework.boot.autoconfigure: INFO

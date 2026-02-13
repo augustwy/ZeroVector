@@ -1,0 +1,86 @@
+package cn.nexon.zerovector.springboot.autoconfigure;
+
+import cn.nexon.zerovector.core.ai.LLMService;
+import cn.nexon.zerovector.core.SemanticTreeService;
+import cn.nexon.zerovector.springboot.service.ZeroVectorService;
+import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMService;
+import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMService;
+import dev.langchain4j.model.chat.ChatLanguageModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+/**
+ * ZeroVector Spring Boot 自动配置类
+ */
+@AutoConfiguration
+@ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
+@EnableConfigurationProperties(ZeroVectorProperties.class)
+public class ZeroVectorAutoConfiguration {
+
+    private static final Logger logger = LoggerFactory.getLogger(ZeroVectorAutoConfiguration.class);
+
+    // 检测到 Spring AI 类路径
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(ChatModel.class)
+    static class SpringAiConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean(LLMService.class)
+        public LLMService springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
+            return new SpringAiLLMService(chatModel, config.getModel());
+        }
+    }
+
+    // 检测到 Langchain4j 类路径
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(ChatLanguageModel.class)
+    static class Langchain4jConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean(LLMService.class)
+        public LLMService langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
+            return new LangChain4jLLMService(chatLanguageModel, config.getLangChain4j());
+        }
+    }
+
+    /**
+     * 创建语义树服务
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public SemanticTreeService semanticTreeService(LLMService llmService, ZeroVectorProperties properties) {
+        logger.info("创建语义树服务，存储路径: {}, 分片存储: {}",
+                properties.getStoragePath(), properties.isUseShardedStorage());
+
+        Path storagePath = Paths.get(properties.getStoragePath());
+        SemanticTreeService service = new SemanticTreeService(llmService, storagePath, properties.isUseShardedStorage(), properties.getConcurrency());
+        try {
+            service.initialize();
+            logger.info("语义树服务初始化完成");
+            return service;
+        } catch (Exception e) {
+            logger.error("语义树服务初始化失败", e);
+            throw new RuntimeException("语义树服务初始化失败", e);
+        }
+    }
+
+    /**
+     * 高级API
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public ZeroVectorService zeroVectorService(SemanticTreeService semanticTreeService) {
+        return new ZeroVectorService(semanticTreeService);
+    }
+}
