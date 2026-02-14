@@ -48,9 +48,9 @@ public class SemanticTreeManager {
     private Navigator navigator;
     private HybridNavigator hybridNavigator;
 
-    public SemanticTreeManager(LLMProvider llmProvider, Path storagePath, boolean useShardedStorage, ConcurrencyProperties concurrencyProperties) {
+    public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender, Path storagePath, boolean useShardedStorage, ConcurrencyProperties concurrencyProperties) {
         this.llmProvider = llmProvider;
-        this.documentComprehender = new DocumentComprehender(llmProvider, 4000);
+        this.documentComprehender = documentComprehender;
         this.keywordDictionary = new KeywordDictionary();
         this.storagePath = storagePath;
         this.treeFilePath = storagePath.toString() + ".tree";

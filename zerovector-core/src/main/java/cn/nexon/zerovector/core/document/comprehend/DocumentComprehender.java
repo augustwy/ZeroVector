@@ -20,7 +20,7 @@ import java.util.List;
 
 public class DocumentComprehender {
     private static final Logger logger = LoggerFactory.getLogger(DocumentComprehender.class);
-    
+
     private final LLMProvider llmProvider;
     private final int maxChunkSize;
     private static final int MMAP_THRESHOLD = 10 * 1024 * 1024;
@@ -66,7 +66,7 @@ public class DocumentComprehender {
         }
 
         try (RandomAccessFile raf = new RandomAccessFile(filePath, "r");
-             FileChannel channel = raf.getChannel()) {
+                FileChannel channel = raf.getChannel()) {
 
             long position = 0;
             int chunkIndex = 0;
@@ -78,10 +78,9 @@ public class DocumentComprehender {
                 long mapSize = Math.min(chunkSize, Integer.MAX_VALUE);
 
                 MappedByteBuffer buffer = channel.map(
-                    FileChannel.MapMode.READ_ONLY,
-                    position,
-                    mapSize
-                );
+                        FileChannel.MapMode.READ_ONLY,
+                        position,
+                        mapSize);
 
                 try {
                     byte[] bytes = new byte[buffer.remaining()];
@@ -89,21 +88,21 @@ public class DocumentComprehender {
                     String chunk = new String(bytes, StandardCharsets.UTF_8);
 
                     String context = buildContext(accumulatedSummary.toString(), allKeywordDefinitions, chunk);
-            String prompt = buildComprehendPrompt(context, chunkIndex + 1, totalChunks);
-            String fullPrompt = prompt + "\n\n" + chunk;
+                    String prompt = buildComprehendPrompt(context, chunkIndex + 1, totalChunks);
+                    String fullPrompt = prompt + "\n\n" + chunk;
 
-            String response = llmProvider.comprehendChunk(fullPrompt);
-            DocumentComprehendResult chunkResult;
-            try {
-                chunkResult = parseComprehendResponse(response);
-            } catch (Exception e) {
-                logger.error("解析LLM响应失败: {}", e.getMessage());
-                chunkResult = new DocumentComprehendResult("", List.of(), List.of(), List.of());
-            }
+                    String response = llmProvider.comprehendChunk(fullPrompt);
+                    DocumentComprehendResult chunkResult;
+                    try {
+                        chunkResult = parseComprehendResponse(response);
+                    } catch (Exception e) {
+                        logger.error("解析LLM响应失败: {}", e.getMessage());
+                        chunkResult = new DocumentComprehendResult("", List.of(), List.of(), List.of());
+                    }
 
-            allKeywordDefinitions.addAll(chunkResult.keywordDefinitions());
-            allEntities.addAll(chunkResult.entities());
-            allQuestions.addAll(chunkResult.exampleQuestions());
+                    allKeywordDefinitions.addAll(chunkResult.keywordDefinitions());
+                    allEntities.addAll(chunkResult.entities());
+                    allQuestions.addAll(chunkResult.exampleQuestions());
 
                     if (chunkResult.summary() != null && !chunkResult.summary().isEmpty()) {
                         accumulatedSummary.append(chunkResult.summary()).append(" ");
@@ -112,8 +111,8 @@ public class DocumentComprehender {
                     position += chunkSize;
                     chunkIndex++;
 
-                    logger.debug("处理文档块 {}/{}, 位置: {}/{}, 大小: {} bytes", 
-                        chunkIndex, totalChunks, position, chunkSize);
+                    logger.debug("处理文档块 {}/{}, 位置: {}/{}, 大小: {} bytes",
+                            chunkIndex, totalChunks, position, chunkSize);
                 } finally {
                     unmapBuffer(buffer);
                 }
@@ -127,11 +126,10 @@ public class DocumentComprehender {
             logger.info("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
 
             return new DocumentComprehendResult(
-                finalSummary,
-                allKeywordDefinitions.stream().distinct().toList(),
-                allEntities.stream().distinct().toList(),
-                allQuestions.stream().distinct().toList()
-            );
+                    finalSummary,
+                    allKeywordDefinitions.stream().distinct().toList(),
+                    allEntities.stream().distinct().toList(),
+                    allQuestions.stream().distinct().toList());
         } catch (IOException e) {
             logger.error("读取文档失败: {}", filePath, e);
             return DocumentComprehendResult.of("", List.of());
@@ -193,18 +191,17 @@ public class DocumentComprehender {
         }
 
         String summaryPrompt = "请为以下文档生成摘要（不超过200字）：\n\n" +
-                    "标题：" + document.title() + "\n" +
-                    "内容：" + accumulatedSummary.toString();
-            String finalSummary = llmProvider.generateSummary(summaryPrompt);
+                "标题：" + document.title() + "\n" +
+                "内容：" + accumulatedSummary.toString();
+        String finalSummary = llmProvider.generateSummary(summaryPrompt);
 
-            logger.info("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
+        logger.info("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
 
         return new DocumentComprehendResult(
-            finalSummary,
-            allKeywordDefinitions.stream().distinct().toList(),
-            allEntities.stream().distinct().toList(),
-            allQuestions.stream().distinct().toList()
-        );
+                finalSummary,
+                allKeywordDefinitions.stream().distinct().toList(),
+                allEntities.stream().distinct().toList(),
+                allQuestions.stream().distinct().toList());
     }
 
     private String readSmallFile(String filePath) {
@@ -220,10 +217,10 @@ public class DocumentComprehender {
         if (buffer == null) {
             return;
         }
-        
+
         try {
             buffer.force();
-            
+
             try {
                 java.lang.reflect.Field cleanerField = buffer.getClass().getDeclaredField("cleaner");
                 cleanerField.setAccessible(true);
@@ -242,11 +239,11 @@ public class DocumentComprehender {
 
     private String buildContext(String previousSummary, List<KeywordDefinition> previousKeywords, String currentChunk) {
         StringBuilder context = new StringBuilder();
-        
+
         if (previousSummary != null && !previousSummary.isEmpty()) {
             context.append("前文摘要：").append(previousSummary).append("\n\n");
         }
-        
+
         if (!previousKeywords.isEmpty()) {
             context.append("前文关键词：");
             for (int i = 0; i < Math.min(previousKeywords.size(), 5); i++) {
@@ -258,9 +255,9 @@ public class DocumentComprehender {
             }
             context.append("\n\n");
         }
-        
+
         context.append("当前内容：").append(currentChunk);
-        
+
         return context.toString();
     }
 
@@ -294,24 +291,26 @@ public class DocumentComprehender {
                 "  \"exampleQuestions\": [\"问题1\", \"问题2\"]\n" +
                 "}";
     }
-    
+
     private DocumentComprehendResult parseComprehendResponse(String jsonContent) throws Exception {
         com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
         Map<String, Object> resultMap = objectMapper.readValue(jsonContent, Map.class);
         String summary = (String) resultMap.get("summary");
-        
-        List<Map<String, String>> keywordDataList = (List<Map<String, String>>) resultMap.getOrDefault("keywordDefinitions", List.of());
+
+        List<Map<String, String>> keywordDataList = (List<Map<String, String>>) resultMap
+                .getOrDefault("keywordDefinitions", List.of());
         List<String> entities = (List<String>) resultMap.getOrDefault("entities", List.of());
         List<String> questions = (List<String>) resultMap.getOrDefault("exampleQuestions", List.of());
-        
+
         List<cn.nexon.zerovector.core.model.KeywordDefinition> keywordDefinitions = new ArrayList<>();
         for (Map<String, String> keywordData : keywordDataList) {
             String keyword = keywordData.get("keyword");
             String definition = keywordData.get("definition");
             String context = keywordData.get("context");
-            keywordDefinitions.add(cn.nexon.zerovector.core.model.KeywordDefinition.of(keyword, definition, context, "doc_" + System.currentTimeMillis()));
+            keywordDefinitions.add(cn.nexon.zerovector.core.model.KeywordDefinition.of(keyword, definition, context,
+                    "doc_" + System.currentTimeMillis()));
         }
-        
+
         return new DocumentComprehendResult(summary, keywordDefinitions, entities, questions);
     }
 }

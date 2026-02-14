@@ -83,10 +83,15 @@ mvn spring-boot:run
 ### 基本使用
 
 ```java
-// 创建语义树管理器
+// 创建 LLM 提供者
 LLMProvider llmProvider = new YourLLMProvider();
+
+// 创建文档理解器（配置最大切片大小）
+DocumentComprehender documentComprehender = new DocumentComprehender(llmProvider, 4000);
+
+// 创建语义树管理器
 Path storagePath = Paths.get("./data/zerovector_storage");
-SemanticTreeManager manager = new SemanticTreeManager(llmProvider, storagePath);
+SemanticTreeManager manager = new SemanticTreeManager(llmProvider, documentComprehender, storagePath, true, new ConcurrencyProperties());
 
 // 初始化
 manager.initialize();

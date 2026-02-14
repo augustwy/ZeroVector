@@ -139,16 +139,15 @@ public class ZeroVectorProperties {
      * LLM上下文配置
      */
     public static class LLMContext {
-        private int maxContextTokens = 4000;
+        private int maxChunkTokens = 4000;
         private int chunkOverlapTokens = 200;
-        private int minChunkTokens = 500;
 
-        public int getMaxContextTokens() {
-            return maxContextTokens;
+        public int getMaxChunkTokens() {
+            return maxChunkTokens;
         }
 
-        public void setMaxContextTokens(int maxContextTokens) {
-            this.maxContextTokens = maxContextTokens;
+        public void setMaxChunkTokens(int maxChunkTokens) {
+            this.maxChunkTokens = maxChunkTokens;
         }
 
         public int getChunkOverlapTokens() {
@@ -157,14 +156,6 @@ public class ZeroVectorProperties {
 
         public void setChunkOverlapTokens(int chunkOverlapTokens) {
             this.chunkOverlapTokens = chunkOverlapTokens;
-        }
-
-        public int getMinChunkTokens() {
-            return minChunkTokens;
-        }
-
-        public void setMinChunkTokens(int minChunkTokens) {
-            this.minChunkTokens = minChunkTokens;
         }
     }
 }
