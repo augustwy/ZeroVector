@@ -74,20 +74,58 @@ public class LazyNodeMap implements Map<String, TreeNode> {
     @Override
     public Collection<TreeNode> values() {
         Set<String> keys = keySet();
-        List<TreeNode> values = new ArrayList<>(keys.size());
-        for (String key : keys) {
-            values.add(get(key));
-        }
-        return values;
+        return new AbstractCollection<TreeNode>() {
+            @Override
+            public Iterator<TreeNode> iterator() {
+                return new Iterator<TreeNode>() {
+                    private final Iterator<String> keyIterator = keys.iterator();
+                    
+                    @Override
+                    public boolean hasNext() {
+                        return keyIterator.hasNext();
+                    }
+                    
+                    @Override
+                    public TreeNode next() {
+                        String key = keyIterator.next();
+                        return get(key);
+                    }
+                };
+            }
+            
+            @Override
+            public int size() {
+                return keys.size();
+            }
+        };
     }
     
     @Override
     public Set<Entry<String, TreeNode>> entrySet() {
         Set<String> keys = keySet();
-        Set<Entry<String, TreeNode>> entries = new HashSet<>(keys.size());
-        for (String key : keys) {
-            entries.add(new AbstractMap.SimpleEntry<>(key, get(key)));
-        }
-        return entries;
+        return new AbstractSet<Entry<String, TreeNode>>() {
+            @Override
+            public Iterator<Entry<String, TreeNode>> iterator() {
+                return new Iterator<Entry<String, TreeNode>>() {
+                    private final Iterator<String> keyIterator = keys.iterator();
+                    
+                    @Override
+                    public boolean hasNext() {
+                        return keyIterator.hasNext();
+                    }
+                    
+                    @Override
+                    public Entry<String, TreeNode> next() {
+                        String key = keyIterator.next();
+                        return new AbstractMap.SimpleEntry<>(key, get(key));
+                    }
+                };
+            }
+            
+            @Override
+            public int size() {
+                return keys.size();
+            }
+        };
     }
 }

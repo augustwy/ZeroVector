@@ -73,11 +73,30 @@ public class LazyChunkMap implements Map<String, DocumentChunk> {
     @Override
     public Collection<DocumentChunk> values() {
         Set<String> keys = keySet();
-        List<DocumentChunk> values = new ArrayList<>(keys.size());
-        for (String key : keys) {
-            values.add(get(key));
-        }
-        return values;
+        return new AbstractCollection<DocumentChunk>() {
+            @Override
+            public Iterator<DocumentChunk> iterator() {
+                return new Iterator<DocumentChunk>() {
+                    private final Iterator<String> keyIterator = keys.iterator();
+                    
+                    @Override
+                    public boolean hasNext() {
+                        return keyIterator.hasNext();
+                    }
+                    
+                    @Override
+                    public DocumentChunk next() {
+                        String key = keyIterator.next();
+                        return get(key);
+                    }
+                };
+            }
+            
+            @Override
+            public int size() {
+                return keys.size();
+            }
+        };
     }
     
     @Override

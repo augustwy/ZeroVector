@@ -113,7 +113,26 @@ public class ShardedTreeStorage implements AutoCloseable {
      * 只保存新增的节点和文档块，提高效率
      */
     public void updateTreeIncremental(SemanticTree oldTree, SemanticTree newTree) throws IOException {
-        // 找出新增的节点
+        if (oldTree == null) {
+            throw new IllegalArgumentException("Old tree cannot be null");
+        }
+        if (newTree == null) {
+            throw new IllegalArgumentException("New tree cannot be null");
+        }
+        
+        TreeNode oldRoot = oldTree.rootNode();
+        TreeNode newRoot = newTree.rootNode();
+        
+        if (oldRoot == null && newRoot == null) {
+            return;
+        }
+        
+        if (oldRoot == null || !oldRoot.equals(newRoot)) {
+            if (newRoot != null) {
+                saveRootNode(newRoot);
+            }
+        }
+        
         Map<String, TreeNode> newNodes = new HashMap<>();
         for (Map.Entry<String, TreeNode> entry : newTree.nodes().entrySet()) {
             if (!oldTree.nodes().containsKey(entry.getKey())) {
@@ -121,7 +140,6 @@ public class ShardedTreeStorage implements AutoCloseable {
             }
         }
         
-        // 找出新增的文档块
         Map<String, DocumentChunk> newChunks = new HashMap<>();
         for (Map.Entry<String, DocumentChunk> entry : newTree.chunks().entrySet()) {
             if (!oldTree.chunks().containsKey(entry.getKey())) {
@@ -129,22 +147,14 @@ public class ShardedTreeStorage implements AutoCloseable {
             }
         }
         
-        // 保存根节点（如果更新）
-        if (!oldTree.rootNode().equals(newTree.rootNode())) {
-            saveRootNode(newTree.rootNode());
-        }
-        
-        // 分片保存新增节点
         if (!newNodes.isEmpty()) {
             saveNodesInShards(newNodes);
         }
         
-        // 分片保存新增文档块
         if (!newChunks.isEmpty()) {
             saveChunksInShards(newChunks);
         }
         
-        // 保存元数据
         saveMetadata();
     }
     
@@ -152,38 +162,44 @@ public class ShardedTreeStorage implements AutoCloseable {
      * 获取节点（支持懒加载）
      */
     public TreeNode getNode(String nodeId) throws IOException {
-        return nodeCache.get(nodeId, key -> {
-            String shardFile = nodeShards.get(key);
-            if (shardFile == null) {
-                return null;
-            }
-            
-            try {
-                loadNodeShard(shardFile);
-                return nodeCache.getIfPresent(key);
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to load node: " + key, e);
-            }
-        });
+        String shardFile = nodeShards.get(nodeId);
+        if (shardFile == null) {
+            return null;
+        }
+        
+        TreeNode cached = nodeCache.getIfPresent(nodeId);
+        if (cached != null) {
+            return cached;
+        }
+        
+        try {
+            loadNodeShard(shardFile);
+            return nodeCache.getIfPresent(nodeId);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load node: " + nodeId, e);
+        }
     }
     
     /**
      * 获取文档块（支持懒加载）
      */
     public DocumentChunk getChunk(String chunkId) throws IOException {
-        return chunkCache.get(chunkId, key -> {
-            String shardFile = chunkShards.get(key);
-            if (shardFile == null) {
-                return null;
-            }
-            
-            try {
-                loadChunkShard(shardFile);
-                return chunkCache.getIfPresent(key);
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to load chunk: " + key, e);
-            }
-        });
+        String shardFile = chunkShards.get(chunkId);
+        if (shardFile == null) {
+            return null;
+        }
+        
+        DocumentChunk cached = chunkCache.getIfPresent(chunkId);
+        if (cached != null) {
+            return cached;
+        }
+        
+        try {
+            loadChunkShard(shardFile);
+            return chunkCache.getIfPresent(chunkId);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load chunk: " + chunkId, e);
+        }
     }
     
     /**

@@ -1,5 +1,6 @@
 package cn.nexon.zerovector.core.index;
 
+import cn.nexon.zerovector.core.model.KeywordDefinition;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -9,52 +10,64 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 关键词倒排索引
- * [CRITICAL] 必须支持高并发读取
- */
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class KeywordDictionary {
     
-    // 倒排索引：Keyword -> List<NodeId>
+    private final Map<String, KeywordDefinition> keywordDefinitions = new ConcurrentHashMap<>();
     private final Map<String, List<String>> invertedIndex = new ConcurrentHashMap<>();
-    
-    // 权重索引：Keyword -> Weight (用于排序)
     private final Map<String, Double> keywordWeights = new ConcurrentHashMap<>();
 
+    private final Logger logger = LoggerFactory.getLogger(KeywordDictionary.class);
+
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    
-    /**
-     * 添加关键词条目
-     */
+
+    public void addKeywordDefinition(KeywordDefinition definition) {
+        String normalizedKeyword = definition.normalizedKeyword();
+        keywordDefinitions.put(normalizedKeyword, definition);
+    }
+
+    public void addKeywordDefinitions(List<KeywordDefinition> definitions) {
+        for (KeywordDefinition definition : definitions) {
+            addKeywordDefinition(definition);
+        }
+    }
+
     public void addEntry(String keyword, String nodeId, double weight) {
-        String key = keyword.toLowerCase();
-        invertedIndex.compute(key, (k, list) -> {
+        String normalizedKeyword = keyword.toLowerCase();
+        invertedIndex.compute(normalizedKeyword, (k, list) -> {
             if (list == null) {
                 list = new ArrayList<>();
             }
-            list.add(nodeId);
+            if (!list.contains(nodeId)) {
+                list.add(nodeId);
+            }
             return list;
         });
-        keywordWeights.put(key, weight);
+        keywordWeights.merge(normalizedKeyword, weight, Double::sum);
     }
-    
-    /**
-     * 批量添加关键词条目
-     */
+
     public void addEntries(List<String> keywords, String nodeId) {
         for (String keyword : keywords) {
-            addEntry(keyword, nodeId, 1.0); // 默认权重为1.0
+            addEntry(keyword, nodeId, 1.0);
         }
     }
-    
-    /**
-     * 匹配查询中的关键词，返回候选节点
-     * [KEY] 混合检索的第一步
-     */
+
+    public void addEntriesWithDefinitions(List<KeywordDefinition> definitions, String nodeId) {
+        for (KeywordDefinition definition : definitions) {
+            addKeywordDefinition(definition);
+            addEntry(definition.keyword(), nodeId, 1.0);
+        }
+    }
+
+    public Optional<KeywordDefinition> getKeywordDefinition(String keyword) {
+        return Optional.ofNullable(keywordDefinitions.get(keyword.toLowerCase()));
+    }
+
     public Map<String, Double> matchCandidates(String query) {
         Map<String, Double> candidateScores = new HashMap<>();
         
-        // 简单分词匹配 (可升级为 AC 自动机或 FST)
         Arrays.stream(query.split("\\s+"))
             .filter(invertedIndex::containsKey)
             .forEach(kw -> {
@@ -66,10 +79,7 @@ public final class KeywordDictionary {
             
         return candidateScores;
     }
-    
-    /**
-     * 获取最高权重的候选节点
-     */
+
     public Optional<String> getTopCandidate(String query) {
         Map<String, Double> candidates = matchCandidates(query);
         if (candidates.isEmpty()) {
@@ -81,25 +91,23 @@ public final class KeywordDictionary {
             .map(Map.Entry::getKey);
     }
 
-    /**
-     * 保存关键词字典到文件
-     */
     public void saveToFile(String filePath) throws IOException {
         Path path = Paths.get(filePath);
-
-        // 创建包含所有数据的映射
+        
         Map<String, Object> data = new HashMap<>();
+        data.put("keywordDefinitions", keywordDefinitions);
         data.put("invertedIndex", invertedIndex);
         data.put("keywordWeights", keywordWeights);
-
-        // 使用 Jackson 序列化为 JSON
+        
         String json = objectMapper.writeValueAsString(data);
         Files.writeString(path, json);
+        
+        logger.info("保存关键词字典: {}", filePath);
+        logger.info("关键词定义数量: {}", keywordDefinitions.size());
+        logger.info("倒排索引数量: {}", invertedIndex.size());
+        logger.info("关键词权重数量: {}", keywordWeights.size());
     }
 
-    /**
-     * 从文件加载关键词字典
-     */
     public static KeywordDictionary loadFromFile(String filePath) throws IOException {
         Path path = Paths.get(filePath);
 
@@ -112,13 +120,25 @@ public final class KeywordDictionary {
 
         KeywordDictionary dictionary = new KeywordDictionary();
 
-        // 恢复倒排索引
+        Map<String, Map<String, Object>> definitionsData = (Map<String, Map<String, Object>>) data.get("keywordDefinitions");
+        if (definitionsData != null) {
+            definitionsData.forEach((key, value) -> {
+                String keyword = (String) value.get("keyword");
+                String definition = (String) value.get("definition");
+                String context = (String) value.get("context");
+                String documentId = (String) value.get("documentId");
+                Integer frequency = (Integer) value.get("frequency");
+                dictionary.keywordDefinitions.put(key, new KeywordDefinition(
+                    keyword, definition, context, documentId, frequency != null ? frequency : 1
+                ));
+            });
+        }
+
         Map<String, List<String>> invertedIndexData = (Map<String, List<String>>) data.get("invertedIndex");
         if (invertedIndexData != null) {
             dictionary.invertedIndex.putAll(invertedIndexData);
         }
 
-        // 恢复权重索引
         Map<String, Double> keywordWeightsData = (Map<String, Double>) data.get("keywordWeights");
         if (keywordWeightsData != null) {
             dictionary.keywordWeights.putAll(keywordWeightsData);
@@ -126,40 +146,30 @@ public final class KeywordDictionary {
 
         return dictionary;
     }
-    
-    /**
-     * 检查是否包含指定关键词
-     */
+
     public boolean containsKeyword(String keyword) {
-        return invertedIndex.containsKey(keyword.toLowerCase());
+        return keywordDefinitions.containsKey(keyword.toLowerCase());
     }
-    
-    /**
-     * 获取关键词的所有节点
-     */
+
     public List<String> getNodesForKeyword(String keyword) {
         return invertedIndex.getOrDefault(keyword.toLowerCase(), Collections.emptyList());
     }
-    
-    /**
-     * 获取所有关键词
-     */
+
     public Set<String> getAllKeywords() {
-        return new HashSet<>(invertedIndex.keySet());
+        return new HashSet<>(keywordDefinitions.keySet());
     }
-    
-    /**
-     * 清空词典
-     */
+
+    public Collection<KeywordDefinition> getAllKeywordDefinitions() {
+        return keywordDefinitions.values();
+    }
+
     public void clear() {
+        keywordDefinitions.clear();
         invertedIndex.clear();
         keywordWeights.clear();
     }
-    
-    /**
-     * 获取词典大小
-     */
+
     public int size() {
-        return invertedIndex.size();
+        return keywordDefinitions.size();
     }
 }

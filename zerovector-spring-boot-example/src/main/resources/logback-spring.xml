@@ -32,8 +32,4 @@
         <appender-ref ref="CONSOLE" />
         <appender-ref ref="ASYNC" />
     </root>
-
-    <logger name="com.nexon.nutriai" level="INFO"/>
-    <logger name="org.hibernate.SQL" level="INFO"/>
-    <logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="INFO"/>
 </configuration>

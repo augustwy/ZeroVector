@@ -51,7 +51,7 @@ public class DesignPatternsDocumentTest {
         ClassPathResource scissorsResource = new ClassPathResource("寂静的轰鸣：论一把手工剪刀的重量.md");
 
         // 配置文档处理参数
-        semanticFacade.setNoChunkingMode();
+        // semanticFacade.setNoChunkingMode();
 
         if (designPatternsResource.exists()) {
             // 使用文档处理功能添加设计模式文档

@@ -150,12 +150,17 @@ public class MMapDocumentStore implements AutoCloseable {
         MappedByteBuffer oldBuffer = buffer();
         oldBuffer.force();
         
+        long oldSize = file.length();
+        int oldPosition = oldBuffer.position();
+        
         file.setLength(newSize);
         MappedByteBuffer newBuffer = file.getChannel().map(
             FileChannel.MapMode.READ_WRITE, 0, newSize);
         
-        oldBuffer.flip();
+        oldBuffer.rewind();
         newBuffer.put(oldBuffer);
+        
+        newBuffer.position(oldPosition);
         
         setBuffer(newBuffer);
         

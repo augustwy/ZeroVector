@@ -60,6 +60,7 @@ public class ZeroVectorAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
     public DocumentComprehender documentComprehender(LLMProvider llmProvider, ZeroVectorProperties properties) {
         ZeroVectorProperties.LLMContext llmContext = properties.getLlmContext();
         return new DocumentComprehender(llmProvider, llmContext.getMaxContextTokens());
@@ -70,12 +71,12 @@ public class ZeroVectorAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public SemanticTreeManager semanticTreeService(LLMProvider llmProvider, DocumentComprehender documentComprehender, ZeroVectorProperties properties) {
+    public SemanticTreeManager semanticTreeService(LLMProvider llmProvider, ZeroVectorProperties properties) {
         logger.info("创建语义树管理器，存储路径: {}, 分片存储: {}",
                 properties.getStoragePath(), properties.isUseShardedStorage());
 
         Path storagePath = Paths.get(properties.getStoragePath());
-        SemanticTreeManager service = new SemanticTreeManager(llmProvider, documentComprehender, storagePath, properties.isUseShardedStorage(), properties.getConcurrency());
+        SemanticTreeManager service = new SemanticTreeManager(llmProvider, storagePath, properties.isUseShardedStorage(), properties.getConcurrency());
         try {
             service.initialize();
             logger.info("语义树管理器初始化完成");

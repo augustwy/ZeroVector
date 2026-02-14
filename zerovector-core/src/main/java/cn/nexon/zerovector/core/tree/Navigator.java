@@ -1,8 +1,11 @@
 package cn.nexon.zerovector.core.tree;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -16,6 +19,7 @@ import java.util.stream.Collectors;
  * 基于用户查询在语义树中进行导航，找到相关文档
  */
 public class Navigator {
+    private static final Logger logger = LoggerFactory.getLogger(Navigator.class);
     private static final int MAX_NAVIGATION_HISTORY = 100;
     
     private final SemanticTree semanticTree;
@@ -58,7 +62,6 @@ public class Navigator {
      * 递归导航逻辑
      */
     private NavigationResult navigateRecursive(String query, TreeNode node, int depth) {
-        // 防止无限递归
         if (depth > 10) {
             return new NavigationResult(
                 List.of(),
@@ -67,39 +70,8 @@ public class Navigator {
             );
         }
         
-        // 如果是叶子节点，直接返回相关文档
         if (node.isLeaf() || !node.hasChildren()) {
-            List<DocumentChunk> chunks = node.chunkIds().stream()
-                .map(chunkId -> {
-                    DocumentChunk chunk = semanticTree.getChunk(chunkId);
-                    if (chunk == null) {
-                        return null;
-                    }
-                    
-                    // 如果是基于文件路径的文档块，使用MMapDocumentStore读取文件内容
-                    if (chunk.isFilePathBased()) {
-                        try {
-                            String content = documentStore.getChunkContent(chunk);
-                            // 创建一个新的DocumentChunk，包含从文件读取的内容
-                            return new DocumentChunk(
-                                chunk.id(),
-                                content,  // 从文件读取的实际内容
-                                chunk.summary(),
-                                chunk.filePath(),
-                                chunk.md5(),
-                                chunk.metadata()
-                            );
-                        } catch (Exception e) {
-                            // 如果读取失败，返回原始块
-                            return chunk;
-                        }
-                    }
-                    
-                    return chunk;
-                })
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
-            
+            List<DocumentChunk> chunks = loadChunksFromNode(node);
             return new NavigationResult(
                 chunks,
                 "Found relevant documents at leaf node",
@@ -107,16 +79,24 @@ public class Navigator {
             );
         }
         
-        // 获取子节点
         List<TreeNode> childNodes = node.childrenIds().stream()
             .map(semanticTree::getNode)
             .filter(Objects::nonNull)
             .collect(Collectors.toList());
         
-        // 使用LLM决定下一步导航动作
-        NavigationAction action = llmService.decideNavigation(query, node, childNodes);
+        List<String> childNodeDescriptions = childNodes.stream()
+            .map(n -> n.name() + " - " + n.description())
+            .toList();
+        String navigationPrompt = LLMPromptTemplates.decideNavigation(
+            query,
+            node.name(),
+            node.description(),
+            childNodeDescriptions
+        );
         
-        // 根据动作执行导航
+        String response = llmService.decideNavigation(navigationPrompt);
+        NavigationAction action = parseNavigationResponse(response, childNodes);
+        
         return switch (action) {
             case NavigationAction.SelectChild(String nodeId, String reasoning, double confidence) -> {
                 TreeNode nextNode = semanticTree.getNode(nodeId);
@@ -128,7 +108,6 @@ public class Navigator {
                     );
                 }
                 
-                // 更新当前节点和导航历史
                 currentNode = nextNode;
                 List<String> previousNodes = navigationHistory.get(navigationHistory.size() - 1).visitedNodes();
                 List<String> newVisitedNodes = new ArrayList<>(previousNodes);
@@ -139,42 +118,11 @@ public class Navigator {
                     reasoning
                 ));
                 
-                // 递归导航
                 yield navigateRecursive(query, nextNode, depth + 1);
             }
             
             case NavigationAction.SelectLeaves(List<String> chunkIds, String reasoning) -> {
-                List<DocumentChunk> chunks = chunkIds.stream()
-                    .map(chunkId -> {
-                        DocumentChunk chunk = semanticTree.getChunk(chunkId);
-                        if (chunk == null) {
-                            return null;
-                        }
-                        
-                        // 如果是基于文件路径的文档块，使用MMapDocumentStore读取文件内容
-                        if (chunk.isFilePathBased()) {
-                            try {
-                                String content = documentStore.getChunkContent(chunk);
-                                // 创建一个新的DocumentChunk，包含从文件读取的内容
-                                return new DocumentChunk(
-                                    chunk.id(),
-                                    content,  // 从文件读取的实际内容
-                                    chunk.summary(),
-                                    chunk.filePath(),
-                                    chunk.md5(),
-                                    chunk.metadata()
-                                );
-                            } catch (Exception e) {
-                                // 如果读取失败，返回原始块
-                                return chunk;
-                            }
-                        }
-                        
-                        return chunk;
-                    })
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
-                
+                List<DocumentChunk> chunks = loadChunksByIds(chunkIds);
                 yield new NavigationResult(
                     chunks,
                     reasoning,
@@ -183,42 +131,11 @@ public class Navigator {
             }
             
             case NavigationAction.ExpandMultiple(List<String> nodeIds, String reasoning) -> {
-                // 处理多分支并行处理
                 List<DocumentChunk> allChunks = new ArrayList<>();
                 for (String nodeId : nodeIds) {
                     TreeNode n = semanticTree.getNode(nodeId);
                     if (n != null && n.hasChunks()) {
-                        List<DocumentChunk> nodeChunks = n.chunkIds().stream()
-                            .map(chunkId -> {
-                                DocumentChunk chunk = semanticTree.getChunk(chunkId);
-                                if (chunk == null) {
-                                    return null;
-                                }
-                                
-                                // 如果是基于文件路径的文档块，使用MMapDocumentStore读取文件内容
-                                if (chunk.isFilePathBased()) {
-                                    try {
-                                        String content = documentStore.getChunkContent(chunk);
-                                        // 创建一个新的DocumentChunk，包含从文件读取的内容
-                                        return new DocumentChunk(
-                                            chunk.id(),
-                                            content,  // 从文件读取的实际内容
-                                            chunk.summary(),
-                                            chunk.filePath(),
-                                            chunk.md5(),
-                                            chunk.metadata()
-                                        );
-                                    } catch (Exception e) {
-                                        // 如果读取失败，返回原始块
-                                        return chunk;
-                                    }
-                                }
-                                
-                                return chunk;
-                            })
-                            .filter(Objects::nonNull)
-                            .collect(Collectors.toList());
-                        allChunks.addAll(nodeChunks);
+                        allChunks.addAll(loadChunksFromNode(n));
                     }
                 }
                 
@@ -230,7 +147,6 @@ public class Navigator {
             }
             
             case NavigationAction.FallbackSearch(String reason) -> {
-                // 处理回退搜索
                 yield new NavigationResult(
                     List.of(),
                     reason,
@@ -245,6 +161,78 @@ public class Navigator {
             );
         };
     }
+    
+    private List<DocumentChunk> loadChunksFromNode(TreeNode node) {
+        return node.chunkIds().stream()
+            .map(chunkId -> loadChunkWithContent(chunkId))
+            .filter(Objects::nonNull)
+            .collect(Collectors.toList());
+    }
+    
+    private List<DocumentChunk> loadChunksByIds(List<String> chunkIds) {
+        return chunkIds.stream()
+            .map(chunkId -> loadChunkWithContent(chunkId))
+            .filter(Objects::nonNull)
+            .collect(Collectors.toList());
+    }
+    
+    private DocumentChunk loadChunkWithContent(String chunkId) {
+        DocumentChunk chunk = semanticTree.getChunk(chunkId);
+        if (chunk == null) {
+            return null;
+        }
+        
+        if (chunk.isFilePathBased()) {
+            try {
+                String content = documentStore.getChunkContent(chunk);
+                return new DocumentChunk(
+                    chunk.id(),
+                    content,
+                    chunk.summary(),
+                    chunk.filePath(),
+                    chunk.md5(),
+                    chunk.metadata()
+                );
+            } catch (Exception e) {
+                logger.warn("读取文件内容失败: {}", chunk.filePath(), e);
+                return chunk;
+            }
+        }
+        
+        return chunk;
+    }
+    
+    private NavigationAction parseNavigationResponse(String response, List<TreeNode> childNodes) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            NavigationDecisionResult result = objectMapper.readValue(response, NavigationDecisionResult.class);
+            
+            if (result.selectedIndex() >= 0 && result.selectedIndex() < childNodes.size()) {
+                TreeNode selectedNode = childNodes.get(result.selectedIndex());
+                return new NavigationAction.SelectChild(
+                        selectedNode.id(),
+                        result.reasoning(),
+                        result.confidence()
+                );
+            } else {
+                return new NavigationAction.Stop(result.reasoning());
+            }
+        } catch (Exception e) {
+            logger.error("解析导航决策失败: {}", e.getMessage());
+            if (childNodes.isEmpty()) {
+                return new NavigationAction.Stop("没有可用的子节点");
+            } else {
+                TreeNode selectedNode = childNodes.get(0);
+                return new NavigationAction.SelectChild(
+                        selectedNode.id(),
+                        "默认选择第一个子节点",
+                        0.5
+                );
+            }
+        }
+    }
+    
+    private record NavigationDecisionResult(int selectedIndex, String reasoning, double confidence) {}
     
     /**
      * 获取当前节点

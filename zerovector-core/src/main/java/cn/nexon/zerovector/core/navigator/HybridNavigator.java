@@ -4,6 +4,8 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,6 +19,7 @@ import java.util.stream.Collectors;
  * 目标：结合关键词跳转与 LLM 语义推理，实现精准导航
  */
 public class HybridNavigator {
+    private static final Logger logger = LoggerFactory.getLogger(HybridNavigator.class);
     
     private final SemanticTree tree;
     private final KeywordDictionary dictionary;
@@ -34,19 +37,27 @@ public class HybridNavigator {
      * 执行导航
      */
     public NavigationResult navigate(String query) {
-        // [Phase 1] 关键词匹配 (快速通道)
         Map<String, Double> candidates = dictionary.matchCandidates(query);
         String fastTrackNodeId = null;
         
-        // 如果存在高权重命中，走快速通道
         if (!candidates.isEmpty()) {
             fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
         }
         
-        // [Phase 2] LLM 语义决策
-        TreeNode currentNode = (fastTrackNodeId != null) 
-            ? tree.getNode(fastTrackNodeId) 
-            : tree.rootNode();
+        TreeNode currentNode;
+        if (fastTrackNodeId != null) {
+            currentNode = tree.getNode(fastTrackNodeId);
+            if (currentNode == null) {
+                logger.warn("快速通道节点 {} 不存在，回退到根节点", fastTrackNodeId);
+                currentNode = tree.rootNode();
+            }
+        } else {
+            currentNode = tree.rootNode();
+        }
+        
+        if (currentNode == null) {
+            throw new IllegalStateException("无法获取起始节点进行导航");
+        }
             
         return navigateInternal(query, currentNode, new ArrayList<>());
     }
@@ -67,12 +78,17 @@ public class HybridNavigator {
         );
         navigationHistory.add(currentPath);
         
-        while (current.type() != NodeType.LEAF && current.hasChildren()) {
+        while (current.type() != NodeType.LEAF) {
+            if (!current.hasChildren()) {
+                break;
+            }
+            
             // 构建带"提示"的 Prompt
             String prompt = buildNavigationPrompt(query, current);
             
             // 调用 LLM
-            NavigationAction action = llm.decideNavigation(prompt, current, getCurrentChildNodes(current));
+            String response = llm.decideNavigation(prompt);
+            NavigationAction action = parseNavigationResponse(response, getCurrentChildNodes(current));
             
             // [KEY] 模式匹配处理决策
             switch (action) {
@@ -295,4 +311,36 @@ public class HybridNavigator {
             .filter(java.util.Objects::nonNull)
             .collect(Collectors.toList());
     }
+    
+    private NavigationAction parseNavigationResponse(String response, List<TreeNode> childNodes) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            NavigationDecisionResult result = objectMapper.readValue(response, NavigationDecisionResult.class);
+            
+            if (result.selectedIndex() >= 0 && result.selectedIndex() < childNodes.size()) {
+                TreeNode selectedNode = childNodes.get(result.selectedIndex());
+                return new NavigationAction.SelectChild(
+                        selectedNode.id(),
+                        result.reasoning(),
+                        result.confidence()
+                );
+            } else {
+                return new NavigationAction.Stop(result.reasoning());
+            }
+        } catch (Exception e) {
+            logger.error("解析导航决策失败: {}", e.getMessage());
+            if (childNodes.isEmpty()) {
+                return new NavigationAction.Stop("没有可用的子节点");
+            } else {
+                TreeNode selectedNode = childNodes.get(0);
+                return new NavigationAction.SelectChild(
+                        selectedNode.id(),
+                        "默认选择第一个子节点",
+                        0.5
+                );
+            }
+        }
+    }
+    
+    private record NavigationDecisionResult(int selectedIndex, String reasoning, double confidence) {}
 }
