@@ -1,10 +1,11 @@
 package cn.nexon.zerovector.springboot.autoconfigure;
 
-import cn.nexon.zerovector.core.ai.LLMService;
-import cn.nexon.zerovector.core.SemanticTreeService;
-import cn.nexon.zerovector.springboot.service.ZeroVectorService;
-import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMService;
-import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMService;
+import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.SemanticTreeManager;
+import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
+import cn.nexon.zerovector.springboot.service.SemanticFacade;
+import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMProvider;
+import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMProvider;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,9 +37,9 @@ public class ZeroVectorAutoConfiguration {
     static class SpringAiConfiguration {
 
         @Bean
-        @ConditionalOnMissingBean(LLMService.class)
-        public LLMService springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
-            return new SpringAiLLMService(chatModel, config.getModel());
+        @ConditionalOnMissingBean(LLMProvider.class)
+        public LLMProvider springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
+            return new SpringAiLLMProvider(chatModel, config.getModel());
         }
     }
 
@@ -48,30 +49,40 @@ public class ZeroVectorAutoConfiguration {
     static class Langchain4jConfiguration {
 
         @Bean
-        @ConditionalOnMissingBean(LLMService.class)
-        public LLMService langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
-            return new LangChain4jLLMService(chatLanguageModel, config.getLangChain4j());
+        @ConditionalOnMissingBean(LLMProvider.class)
+        public LLMProvider langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
+            return new LangChain4jLLMProvider(chatLanguageModel, config.getLangChain4j());
         }
     }
 
     /**
-     * 创建语义树服务
+     * 创建文档理解器
      */
     @Bean
     @ConditionalOnMissingBean
-    public SemanticTreeService semanticTreeService(LLMService llmService, ZeroVectorProperties properties) {
-        logger.info("创建语义树服务，存储路径: {}, 分片存储: {}",
+    public DocumentComprehender documentComprehender(LLMProvider llmProvider, ZeroVectorProperties properties) {
+        ZeroVectorProperties.LLMContext llmContext = properties.getLlmContext();
+        return new DocumentComprehender(llmProvider, llmContext.getMaxContextTokens());
+    }
+
+    /**
+     * 创建语义树管理器
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public SemanticTreeManager semanticTreeService(LLMProvider llmProvider, DocumentComprehender documentComprehender, ZeroVectorProperties properties) {
+        logger.info("创建语义树管理器，存储路径: {}, 分片存储: {}",
                 properties.getStoragePath(), properties.isUseShardedStorage());
 
         Path storagePath = Paths.get(properties.getStoragePath());
-        SemanticTreeService service = new SemanticTreeService(llmService, storagePath, properties.isUseShardedStorage(), properties.getConcurrency());
+        SemanticTreeManager service = new SemanticTreeManager(llmProvider, documentComprehender, storagePath, properties.isUseShardedStorage(), properties.getConcurrency());
         try {
             service.initialize();
-            logger.info("语义树服务初始化完成");
+            logger.info("语义树管理器初始化完成");
             return service;
         } catch (Exception e) {
-            logger.error("语义树服务初始化失败", e);
-            throw new RuntimeException("语义树服务初始化失败", e);
+            logger.error("语义树管理器初始化失败", e);
+            throw new RuntimeException("语义树管理器初始化失败", e);
         }
     }
 
@@ -80,7 +91,7 @@ public class ZeroVectorAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public ZeroVectorService zeroVectorService(SemanticTreeService semanticTreeService) {
-        return new ZeroVectorService(semanticTreeService);
+    public SemanticFacade zeroVectorService(SemanticTreeManager semanticTreeManager) {
+        return new SemanticFacade(semanticTreeManager);
     }
 }

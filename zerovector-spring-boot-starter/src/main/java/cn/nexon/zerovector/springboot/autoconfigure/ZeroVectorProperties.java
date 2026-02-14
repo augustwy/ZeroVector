@@ -34,6 +34,9 @@ public class ZeroVectorProperties {
     @Valid
     private ConcurrencyProperties concurrency = new ConcurrencyProperties();
 
+    @Valid
+    private LLMContext llmContext = new LLMContext();
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -103,6 +106,14 @@ public class ZeroVectorProperties {
         this.concurrency = concurrency;
     }
 
+    public LLMContext getLlmContext() {
+        return llmContext;
+    }
+
+    public void setLlmContext(LLMContext llmContext) {
+        this.llmContext = llmContext;
+    }
+
     /**
      * 模型配置
      */
@@ -122,5 +133,38 @@ public class ZeroVectorProperties {
      */
     public static class LangChain4j {
 
+    }
+
+    /**
+     * LLM上下文配置
+     */
+    public static class LLMContext {
+        private int maxContextTokens = 4000;
+        private int chunkOverlapTokens = 200;
+        private int minChunkTokens = 500;
+
+        public int getMaxContextTokens() {
+            return maxContextTokens;
+        }
+
+        public void setMaxContextTokens(int maxContextTokens) {
+            this.maxContextTokens = maxContextTokens;
+        }
+
+        public int getChunkOverlapTokens() {
+            return chunkOverlapTokens;
+        }
+
+        public void setChunkOverlapTokens(int chunkOverlapTokens) {
+            this.chunkOverlapTokens = chunkOverlapTokens;
+        }
+
+        public int getMinChunkTokens() {
+            return minChunkTokens;
+        }
+
+        public void setMinChunkTokens(int minChunkTokens) {
+            this.minChunkTokens = minChunkTokens;
+        }
     }
 }

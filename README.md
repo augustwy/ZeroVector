@@ -56,7 +56,7 @@ ZeroVector/
 - **KeywordDictionary** - 关键词倒排索引，解决专有名词识别问题
 - **TreeBuilder** - 语义树构建器，使用虚拟线程并发处理
 - **ShardedTreeStorage** - 分片存储引擎，按需加载
-- **CachedLLMService** - LLM调用缓存层，减少API调用
+- **CachedLLMProvider** - LLM调用缓存层，减少API调用
 
 ## 快速开始
 
@@ -83,22 +83,22 @@ mvn spring-boot:run
 ### 基本使用
 
 ```java
-// 创建语义树服务
-LLMService llmService = new YourLLMService();
+// 创建语义树管理器
+LLMProvider llmProvider = new YourLLMProvider();
 Path storagePath = Paths.get("./data/zerovector_storage");
-SemanticTreeService service = new SemanticTreeService(llmService, storagePath);
+SemanticTreeManager manager = new SemanticTreeManager(llmProvider, storagePath);
 
 // 初始化
-service.initialize();
+manager.initialize();
 
 // 添加文档
-service.addDocument(Paths.get("document.md"));
+manager.addDocument(Paths.get("document.md"));
 
 // 查询导航
-NavigationResult result = service.navigate("什么是单例模式？");
+NavigationResult result = manager.navigate("什么是单例模式？");
 
-// 关闭服务
-service.close();
+// 关闭管理器
+manager.close();
 ```
 
 ### Spring Boot 集成
@@ -108,14 +108,14 @@ service.close();
 public class YourService {
     
     @Autowired
-    private ZeroVectorService zeroVectorService;
+    private SemanticFacade semanticFacade;
     
     public void addDocument(Path filePath) {
-        zeroVectorService.addDocument(filePath);
+        semanticFacade.addDocument(filePath);
     }
     
     public SearchResult search(String query) {
-        return zeroVectorService.search(query);
+        return semanticFacade.search(query);
     }
 }
 ```

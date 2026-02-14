@@ -2,7 +2,7 @@ package cn.nexon.zerovector.springboot.service;
 
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.NavigationPath;
-import cn.nexon.zerovector.core.SemanticTreeService;
+import cn.nexon.zerovector.core.SemanticTreeManager;
 import cn.nexon.zerovector.core.document.DocumentProcessor;
 import cn.nexon.zerovector.core.model.NavigationResult;
 import org.springframework.stereotype.Service;
@@ -13,15 +13,15 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * ZeroVector服务类，提供高级API
+ * 语义门面，提供高级API
  */
 @Service
-public class ZeroVectorService {
+public class SemanticFacade {
     
-    private final SemanticTreeService semanticTreeService;
+    private final SemanticTreeManager semanticTreeManager;
     
-    public ZeroVectorService(SemanticTreeService semanticTreeService) {
-        this.semanticTreeService = semanticTreeService;
+    public SemanticFacade(SemanticTreeManager semanticTreeManager) {
+        this.semanticTreeManager = semanticTreeManager;
     }
     
     /**
@@ -30,7 +30,7 @@ public class ZeroVectorService {
      * @return 搜索结果
      */
     public SearchResult search(String query) {
-        NavigationResult result = semanticTreeService.navigate(query);
+        NavigationResult result = semanticTreeManager.navigate(query);
         
         return new SearchResult(
             query,
@@ -45,11 +45,10 @@ public class ZeroVectorService {
      * @param documents 文档列表
      */
     public void addDocumentChunks(List<DocumentChunk> documents) {
-        if (!semanticTreeService.isTreeLoaded()) {
-            semanticTreeService.buildTree(documents);
+        if (!semanticTreeManager.isTreeLoaded()) {
+            semanticTreeManager.buildTree(documents);
         } else {
-            // 使用增量添加功能
-            semanticTreeService.addDocumentChunks(documents);
+            semanticTreeManager.addDocumentChunks(documents);
         }
     }
     
@@ -59,7 +58,7 @@ public class ZeroVectorService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentAsync(Path filePath) {
-        return semanticTreeService.addDocumentAsync(filePath);
+        return semanticTreeManager.addDocumentAsync(filePath);
     }
     
     /**
@@ -69,7 +68,7 @@ public class ZeroVectorService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentAsync(InputStream inputStream, String fileName) {
-        return semanticTreeService.addDocumentAsync(inputStream, fileName);
+        return semanticTreeManager.addDocumentAsync(inputStream, fileName);
     }
     
     /**
@@ -79,7 +78,7 @@ public class ZeroVectorService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentAsync(String content, String fileName) {
-        return semanticTreeService.addDocumentAsync(content, fileName);
+        return semanticTreeManager.addDocumentAsync(content, fileName);
     }
     
     /**
@@ -87,7 +86,7 @@ public class ZeroVectorService {
      * @param filePath 文件路径
      */
     public void addDocument(Path filePath) {
-        semanticTreeService.addDocument(filePath);
+        semanticTreeManager.addDocument(filePath);
     }
     
     /**
@@ -96,7 +95,7 @@ public class ZeroVectorService {
      * @param fileName 文件名
      */
     public void addDocument(InputStream inputStream, String fileName) {
-        semanticTreeService.addDocument(inputStream, fileName);
+        semanticTreeManager.addDocument(inputStream, fileName);
     }
     
     /**
@@ -105,7 +104,7 @@ public class ZeroVectorService {
      * @param fileName 文件名
      */
     public void addDocument(String content, String fileName) {
-        semanticTreeService.addDocument(content, fileName);
+        semanticTreeManager.addDocument(content, fileName);
     }
     
     /**
@@ -114,15 +113,15 @@ public class ZeroVectorService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentsAsync(List<Path> filePaths) {
-        return semanticTreeService.addDocumentsAsync(filePaths);
+        return semanticTreeManager.addDocumentsAsync(filePaths);
     }
     
     /**
      * 添加多个文档（自动处理和分块）
      * @param documents 文档列表，每个元素包含[content, fileName]
      */
-    public void addDocumentsFromContent(List<SemanticTreeService.DocumentInfo> documents) {
-        semanticTreeService.addDocumentsFromContent(documents);
+    public void addDocumentsFromContent(List<SemanticTreeManager.DocumentInfo> documents) {
+        semanticTreeManager.addDocumentsFromContent(documents);
     }
     
     /**
@@ -131,15 +130,15 @@ public class ZeroVectorService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> rebuildIndexAsync(List<Path> filePaths) {
-        return semanticTreeService.buildTreeFromDocumentsAsync(filePaths);
+        return semanticTreeManager.buildTreeFromDocumentsAsync(filePaths);
     }
     
     /**
      * 重建索引（从文档内容，自动处理和分块）
      * @param documents 文档列表，每个元素包含[content, fileName]
      */
-    public void rebuildIndexFromContent(List<SemanticTreeService.DocumentInfo> documents) {
-        semanticTreeService.buildTreeFromDocuments(documents);
+    public void rebuildIndexFromContent(List<SemanticTreeManager.DocumentInfo> documents) {
+        semanticTreeManager.buildTreeFromDocuments(documents);
     }
     
     /**
@@ -159,10 +158,10 @@ public class ZeroVectorService {
             splitByParagraph,
             splitBySentence,
             splitByHeading,
-            "^#{1,6}\\s+", // 默认Markdown标题模式
+            "^#{1,6}\\s+",
             disableChunking
         );
-        semanticTreeService.setDocumentProcessingConfig(config);
+        semanticTreeManager.setDocumentProcessingConfig(config);
     }
     
     /**
@@ -183,7 +182,7 @@ public class ZeroVectorService {
      * 整个文档将作为一个单独的块处理
      */
     public void setNoChunkingMode() {
-        semanticTreeService.setDocumentProcessingConfig(DocumentProcessor.ProcessingConfig.NO_CHUNKING);
+        semanticTreeManager.setDocumentProcessingConfig(DocumentProcessor.ProcessingConfig.NO_CHUNKING);
     }
     
     /**
@@ -191,7 +190,7 @@ public class ZeroVectorService {
      * @return 支持的文件扩展名列表
      */
     public List<String> getSupportedFormats() {
-        return semanticTreeService.getSupportedFormats();
+        return semanticTreeManager.getSupportedFormats();
     }
     
     /**

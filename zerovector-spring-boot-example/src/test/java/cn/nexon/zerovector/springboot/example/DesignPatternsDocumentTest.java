@@ -1,10 +1,10 @@
 package cn.nexon.zerovector.springboot.example;
 
-import cn.nexon.zerovector.core.SemanticTreeService;
-import cn.nexon.zerovector.core.ai.LLMService;
+import cn.nexon.zerovector.core.SemanticTreeManager;
+import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.NavigationPath;
-import cn.nexon.zerovector.springboot.service.ZeroVectorService;
+import cn.nexon.zerovector.springboot.service.SemanticFacade;
 import cn.nexon.zerovector.springboot.autoconfigure.ZeroVectorAutoConfiguration;
 import org.junit.Before;
 import org.junit.jupiter.api.Test;
@@ -38,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class DesignPatternsDocumentTest {
 
     @Autowired
-    private ZeroVectorService zeroVectorService;
+    private SemanticFacade semanticFacade;
 
     /**
      * 测试设计模式文档的导入功能
@@ -51,17 +51,17 @@ public class DesignPatternsDocumentTest {
         ClassPathResource scissorsResource = new ClassPathResource("寂静的轰鸣：论一把手工剪刀的重量.md");
 
         // 配置文档处理参数
-        zeroVectorService.setNoChunkingMode();
+        semanticFacade.setNoChunkingMode();
 
         if (designPatternsResource.exists()) {
             // 使用文档处理功能添加设计模式文档
-            zeroVectorService.addDocument(designPatternsResource.getFile().toPath());
+            semanticFacade.addDocument(designPatternsResource.getFile().toPath());
             System.out.println("成功导入软件设计模式.md");
         }
         
         if (scissorsResource.exists()) {
             // 使用文档处理功能添加剪刀文档
-            zeroVectorService.addDocument(scissorsResource.getFile().toPath());
+            semanticFacade.addDocument(scissorsResource.getFile().toPath());
             System.out.println("成功导入寂静的轰鸣：论一把手工剪刀的重量.md");
         }
     }
@@ -75,7 +75,7 @@ public class DesignPatternsDocumentTest {
 
         // 2. 测试查询功能
         // 测试查询创建型模式
-        ZeroVectorService.SearchResult result1 = zeroVectorService.search("什么是单例模式");
+        SemanticFacade.SearchResult result1 = semanticFacade.search("什么是单例模式");
         List<NavigationPath> path = result1.path();
         System.out.println("查询'什么是单例模式'的导航路径: " + path);
     }

@@ -1,6 +1,6 @@
 package cn.nexon.zerovector.core.navigator;
 
-import cn.nexon.zerovector.core.ai.LLMService;
+import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
@@ -20,10 +20,10 @@ public class HybridNavigator {
     
     private final SemanticTree tree;
     private final KeywordDictionary dictionary;
-    private final LLMService llm;
+    private final LLMProvider llm;
     private final MMapDocumentStore store;
     
-    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMService llm, MMapDocumentStore store) {
+    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, MMapDocumentStore store) {
         this.tree = tree;
         this.dictionary = dictionary;
         this.llm = llm;

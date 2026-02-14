@@ -1,5 +1,6 @@
 package cn.nexon.zerovector.core.ai;
 
+import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.NavigationAction;
 import cn.nexon.zerovector.core.model.TreeNode;
@@ -7,7 +8,10 @@ import cn.nexon.zerovector.core.tree.TreeBuilder.NodeCategory;
 
 import java.util.List;
 
-public interface LLMService {
+public interface LLMProvider {
+    
+    DocumentComprehendResult comprehendChunk(String prompt, String chunk);
+    
     String generateSummary(String title, String content);
     
     /**

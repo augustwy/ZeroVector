@@ -1,9 +1,11 @@
 package cn.nexon.zerovector.core;
 
-import cn.nexon.zerovector.core.ai.LLMService;
+import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.DocumentProcessor;
 import cn.nexon.zerovector.core.document.DocumentProcessorFactory;
+import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
+import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.NavigationResult;
@@ -32,7 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
- * 语义树服务
+ * 语义树管理器
  * 整合树构建和导航功能，支持分片存储和文档处理
  * 
  * 支持两种存储模式：
@@ -41,16 +43,17 @@ import java.util.stream.Collectors;
  * 
  * 默认使用非分片模式，可通过构造函数参数或静态工厂方法指定存储模式
  */
-public class SemanticTreeService {
-    private static final Logger logger = LoggerFactory.getLogger(SemanticTreeService.class);
+public class SemanticTreeManager {
+    private static final Logger logger = LoggerFactory.getLogger(SemanticTreeManager.class);
 
-    private final LLMService llmService;
-    private KeywordDictionary keywordDictionary;  // 移除final修饰符，允许重新赋值
+    private final LLMProvider llmProvider;
+    private final DocumentComprehender documentComprehender;
+    private KeywordDictionary keywordDictionary;
     private final Path storagePath;
     private final String treeFilePath;
     private final String treeStorageDir;
-    private final String dictionaryFilePath;  // 添加关键词字典文件路径
-    private final String documentsDir;  // 添加文档副本存储目录
+    private final String dictionaryFilePath;
+    private final String documentsDir;
     private final boolean useShardedStorage;
     private final DocumentProcessor documentProcessor;
     private final ConcurrencyProperties concurrencyProperties;
@@ -61,22 +64,27 @@ public class SemanticTreeService {
     private DocumentProcessor.ProcessingConfig currentConfig;
     private HybridNavigator hybridNavigator;
 
-    public SemanticTreeService(LLMService llmService, Path storagePath) {
-        this(llmService, storagePath, false, new ConcurrencyProperties());
+    public SemanticTreeManager(LLMProvider llmProvider, Path storagePath) {
+        this(llmProvider, storagePath, false, new ConcurrencyProperties());
     }
 
-    public SemanticTreeService(LLMService llmService, Path storagePath, ConcurrencyProperties concurrencyProperties) {
-        this(llmService, storagePath, true, concurrencyProperties);
+    public SemanticTreeManager(LLMProvider llmProvider, Path storagePath, ConcurrencyProperties concurrencyProperties) {
+        this(llmProvider, storagePath, true, concurrencyProperties);
     }
 
-    public SemanticTreeService(LLMService llmService, Path storagePath, boolean useShardedStorage, ConcurrencyProperties concurrencyProperties) {
-        this.llmService = llmService;
+    public SemanticTreeManager(LLMProvider llmProvider, Path storagePath, boolean useShardedStorage, ConcurrencyProperties concurrencyProperties) {
+        this(llmProvider, new DocumentComprehender(llmProvider, 4000), storagePath, useShardedStorage, concurrencyProperties);
+    }
+
+    public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender, Path storagePath, boolean useShardedStorage, ConcurrencyProperties concurrencyProperties) {
+        this.llmProvider = llmProvider;
+        this.documentComprehender = documentComprehender;
         this.keywordDictionary = new KeywordDictionary();
         this.storagePath = storagePath;
         this.treeFilePath = storagePath.toString() + ".tree";
         this.treeStorageDir = storagePath.toString() + "_shards";
-        this.dictionaryFilePath = storagePath.toString() + ".dict";  // 初始化字典文件路径
-        this.documentsDir = storagePath.toString() + "_docs";  // 初始化文档副本目录
+        this.dictionaryFilePath = storagePath.toString() + ".dict";
+        this.documentsDir = storagePath.toString() + "_docs";
         this.useShardedStorage = useShardedStorage;
         this.documentProcessor = DocumentProcessorFactory.getInstance().getDefaultProcessor();
         this.currentConfig = DocumentProcessor.ProcessingConfig.DEFAULT;
@@ -84,54 +92,47 @@ public class SemanticTreeService {
     }
     
     /**
-     * 创建非分片模式的语义树服务
-     * @param llmService LLM服务
+     * 创建非分片模式的语义树管理器
+     * @param llmProvider LLM提供者
      * @param storagePath 存储路径
      * @param concurrencyProperties 并发属性
-     * @return 非分片模式的语义树服务实例
+     * @return 非分片模式的语义树管理器实例
      */
-    public static SemanticTreeService createNonSharded(LLMService llmService, Path storagePath, ConcurrencyProperties concurrencyProperties) {
-        return new SemanticTreeService(llmService, storagePath, false, concurrencyProperties);
+    public static SemanticTreeManager createNonSharded(LLMProvider llmProvider, Path storagePath, ConcurrencyProperties concurrencyProperties) {
+        return new SemanticTreeManager(llmProvider, storagePath, false, concurrencyProperties);
     }
     
     /**
-     * 创建分片模式的语义树服务
-     * @param llmService LLM服务
+     * 创建分片模式的语义树管理器
+     * @param llmProvider LLM提供者
      * @param storagePath 存储路径
      * @param concurrencyProperties 并发属性
-     * @return 分片模式的语义树服务实例
+     * @return 分片模式的语义树管理器实例
      */
-    public static SemanticTreeService createSharded(LLMService llmService, Path storagePath, ConcurrencyProperties concurrencyProperties) {
-        return new SemanticTreeService(llmService, storagePath, true, concurrencyProperties);
+    public static SemanticTreeManager createSharded(LLMProvider llmProvider, Path storagePath, ConcurrencyProperties concurrencyProperties) {
+        return new SemanticTreeManager(llmProvider, storagePath, true, concurrencyProperties);
     }
     
     /**
-     * 初始化服务
+     * 初始化管理器
      */
     public void initialize() throws IOException {
         this.documentStore = MMapDocumentStore.open(storagePath.toString());
         
-        // 确保文档副本目录存在
         Files.createDirectories(Paths.get(documentsDir));
         
-        // 初始化分片存储（如果启用）
         if (useShardedStorage) {
             this.shardedTreeStorage = new ShardedTreeStorage(treeStorageDir);
         }
         
-        // 尝试加载已保存的语义树
         if (useShardedStorage) {
             this.semanticTree = shardedTreeStorage.loadTree();
         } else {
             this.semanticTree = SemanticTree.loadFromFile(treeFilePath);
         }
         
-        // 尝试加载已保存的关键词字典
         try {
             KeywordDictionary loadedDict = KeywordDictionary.loadFromFile(dictionaryFilePath);
-            // 将加载的字典内容复制到当前字典
-            // 由于KeywordDictionary没有提供直接复制内容的方法，我们需要使用反射或添加新方法
-            // 这里我们简单地重新加载字典
             this.keywordDictionary = loadedDict;
             logger.info("已加载已保存的关键词字典");
         } catch (IOException e) {
@@ -139,8 +140,8 @@ public class SemanticTreeService {
         }
         
         if (this.semanticTree != null) {
-            this.navigator = new Navigator(semanticTree, llmService, documentStore);
-            this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmService, documentStore);
+            this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
+            this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
             logger.info("已加载已保存的语义树");
         }
     }
@@ -150,18 +151,30 @@ public class SemanticTreeService {
      */
     public void buildTree(List<DocumentChunk> chunks) {
         logger.info("构建语义树，包含 {} 个文档块", chunks.size());
+        
+        List<DocumentChunk> comprehendedChunks = new ArrayList<>();
         for (DocumentChunk chunk : chunks) {
             logger.debug("  - {}: {}", chunk.id(), chunk.summary());
+            DocumentComprehendResult result = documentComprehender.comprehend(chunk);
+            
+            DocumentChunk comprehendedChunk = new DocumentChunk(
+                    chunk.id(),
+                    chunk.content(),
+                    result.summary(),
+                    chunk.filePath(),
+                    chunk.md5(),
+                    chunk.metadata()
+            );
+            comprehendedChunks.add(comprehendedChunk);
         }
         
-        TreeBuilder builder = new TreeBuilder(llmService, keywordDictionary, documentStore, concurrencyProperties);
-        this.semanticTree = builder.build(chunks);
-        this.navigator = new Navigator(semanticTree, llmService, documentStore);
-        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmService, documentStore);
+        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
+        this.semanticTree = builder.build(comprehendedChunks);
+        this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
+        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
         
         logger.info("语义树构建完成，包含 {} 个文档块", semanticTree.chunks().size());
         
-        // 在非分片模式下自动保存构建的树
         if (!useShardedStorage) {
             try {
                 semanticTree.saveToFile(treeFilePath);
@@ -182,7 +195,6 @@ public class SemanticTreeService {
         }
         
         if (semanticTree == null) {
-            // 如果没有现有语义树，则构建新树
             logger.info("没有现有语义树，构建新树");
             buildTree(newChunks);
             return;
@@ -190,32 +202,45 @@ public class SemanticTreeService {
         
         logger.info("现有语义树包含 {} 个文档块", semanticTree.chunks().size());
         
-        // 保存旧的语义树引用，用于增量更新
         SemanticTree oldTree = semanticTree;
         
-        TreeBuilder builder = new TreeBuilder(llmService, keywordDictionary, documentStore, concurrencyProperties);
-        // 重新构建整个树，因为新的TreeBuilder不再支持addToExistingTree
         List<DocumentChunk> allChunks = new ArrayList<>(semanticTree.chunks().values());
         allChunks.addAll(newChunks);
-        this.semanticTree = builder.build(allChunks);
-        this.navigator = new Navigator(semanticTree, llmService, documentStore);
+        
+        List<DocumentChunk> comprehendedChunks = new ArrayList<>();
+        for (DocumentChunk chunk : allChunks) {
+            DocumentComprehendResult result = documentComprehender.comprehend(chunk);
+            DocumentChunk comprehendedChunk = new DocumentChunk(
+                    chunk.id(),
+                    chunk.content(),
+                    result.summary(),
+                    chunk.filePath(),
+                    chunk.md5(),
+                    chunk.metadata()
+            );
+            comprehendedChunks.add(comprehendedChunk);
+        }
+        
+        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
+        SemanticTree newTree = builder.build(comprehendedChunks);
+        this.semanticTree = newTree;
+        this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
+        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
         
         logger.info("更新后语义树包含 {} 个文档块", semanticTree.chunks().size());
         
-        // 如果使用分片存储，进行增量更新
         if (useShardedStorage && shardedTreeStorage != null) {
             try {
-                shardedTreeStorage.updateTreeIncremental(oldTree, semanticTree);
+                shardedTreeStorage.updateTreeIncremental(oldTree, newTree);
             } catch (IOException e) {
                 logger.error("增量更新失败，回退到完整保存: {}", e.getMessage());
                 try {
-                    shardedTreeStorage.saveTree(semanticTree);
+                    shardedTreeStorage.saveTree(newTree);
                 } catch (IOException ex) {
                     logger.error("完整保存也失败: {}", ex.getMessage());
                 }
             }
         } else {
-            // 非分片存储模式下，直接保存更新的语义树
             try {
                 semanticTree.saveToFile(treeFilePath);
                 logger.info("非分片模式：语义树已保存到文件");
@@ -231,7 +256,6 @@ public class SemanticTreeService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentAsync(Path filePath) {
-        // 计算当前文件的MD5值
         String currentMd5;
         try {
             currentMd5 = MD5Util.calculateMD5(filePath);
@@ -239,7 +263,6 @@ public class SemanticTreeService {
             throw new RuntimeException("计算文件MD5失败", e);
         }
         
-        // 确保语义树已加载
         if (semanticTree == null) {
             try {
                 if (useShardedStorage) {
@@ -249,8 +272,8 @@ public class SemanticTreeService {
                 }
                 
                 if (this.semanticTree != null) {
-                    this.navigator = new Navigator(semanticTree, llmService, documentStore);
-                    this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmService, documentStore);
+                    this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
+                    this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
                 }
             } catch (IOException e) {
                 logger.warn("加载语义树失败: {}", e.getMessage());
@@ -258,7 +281,6 @@ public class SemanticTreeService {
             }
         }
         
-        // 检查是否已存在相同MD5的文档
         boolean alreadyExists = false;
         if (semanticTree != null && semanticTree.chunks() != null) {
             alreadyExists = semanticTree.chunks().values().stream()
@@ -270,28 +292,28 @@ public class SemanticTreeService {
             return CompletableFuture.completedFuture(null);
         }
         
-        // 创建文件副本
         Path copiedFile = createDocumentCopy(filePath);
         
-        // 根据文件类型选择合适的处理器
-        DocumentProcessor processor = DocumentProcessorFactory.getInstance().getProcessor(filePath.toString());
-        // 使用当前配置
-        processor.setConfig(currentConfig);
-            
-        return processor.processDocument(filePath)
-            .thenApply(chunks -> {
-                // 将文档块转换为基于文件路径的文档块（不存储内容）
-                return chunks.stream()
-                    .map(chunk -> DocumentChunk.withFilePath(
-                        chunk.id(),
-                        chunk.summary(),
-                        copiedFile.toString(),
-                        chunk.md5(),  // 传递MD5值
-                        chunk.metadata()
-                    ))
-                    .collect(Collectors.toList());
-            })
-            .thenAccept(this::addDocumentChunks);
+        return DocumentProcessorFactory.getInstance().getProcessor(filePath.toString())
+                .processDocument(filePath)
+                .thenApply(chunks -> {
+                    List<DocumentChunk> comprehendedChunks = new ArrayList<>();
+                    for (DocumentChunk chunk : chunks) {
+                        DocumentComprehendResult result = documentComprehender.comprehend(chunk);
+                        DocumentChunk comprehendedChunk = new DocumentChunk(
+                                chunk.id(),
+                                chunk.content(),
+                                result.summary(),
+                                copiedFile.toString(),
+                                currentMd5,
+                                Map.of("original_file", filePath.toString())
+                        );
+                        comprehendedChunks.add(comprehendedChunk);
+                    }
+                    return comprehendedChunks;
+                })
+                .thenAccept(this::addDocumentChunks)
+                .thenApply(ignored -> null);
     }
     
     /**
@@ -301,13 +323,25 @@ public class SemanticTreeService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentAsync(InputStream inputStream, String fileName) {
-        // 根据文件类型选择合适的处理器
-        DocumentProcessor processor = DocumentProcessorFactory.getInstance().getProcessor(fileName);
-        // 使用当前配置
-        processor.setConfig(currentConfig);
-            
-        return processor.processDocument(inputStream, fileName)
-            .thenAccept(this::addDocumentChunks);
+        return DocumentProcessorFactory.getInstance().getProcessor(fileName)
+                .processDocument(inputStream, fileName)
+                .thenApply(chunks -> {
+                    List<DocumentChunk> comprehendedChunks = new ArrayList<>();
+                    for (DocumentChunk chunk : chunks) {
+                        DocumentComprehendResult result = documentComprehender.comprehend(chunk);
+                        DocumentChunk comprehendedChunk = new DocumentChunk(
+                                chunk.id(),
+                                chunk.content(),
+                                result.summary(),
+                                null,
+                                chunk.md5(),
+                                Map.of("original_file", fileName)
+                        );
+                        comprehendedChunks.add(comprehendedChunk);
+                    }
+                    return comprehendedChunks;
+                })
+                .thenAccept(this::addDocumentChunks);
     }
     
     /**
@@ -317,13 +351,25 @@ public class SemanticTreeService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentAsync(String content, String fileName) {
-        // 根据文件类型选择合适的处理器
-        DocumentProcessor processor = DocumentProcessorFactory.getInstance().getProcessor(fileName);
-        // 使用当前配置
-        processor.setConfig(currentConfig);
-            
-        return processor.processDocument(content, fileName)
-            .thenAccept(this::addDocumentChunks);
+        return DocumentProcessorFactory.getInstance().getProcessor(fileName)
+                .processDocument(content, fileName)
+                .thenApply(chunks -> {
+                    List<DocumentChunk> comprehendedChunks = new ArrayList<>();
+                    for (DocumentChunk chunk : chunks) {
+                        DocumentComprehendResult result = documentComprehender.comprehend(chunk);
+                        DocumentChunk comprehendedChunk = new DocumentChunk(
+                                chunk.id(),
+                                chunk.content(),
+                                result.summary(),
+                                null,
+                                chunk.md5(),
+                                Map.of("original_file", fileName)
+                        );
+                        comprehendedChunks.add(comprehendedChunk);
+                    }
+                    return comprehendedChunks;
+                })
+                .thenAccept(this::addDocumentChunks);
     }
     
     /**
@@ -331,7 +377,6 @@ public class SemanticTreeService {
      * @param filePath 文件路径
      */
     public void addDocument(Path filePath) {
-        // 计算当前文件的MD5值
         String currentMd5;
         try {
             currentMd5 = MD5Util.calculateMD5(filePath);
@@ -339,7 +384,6 @@ public class SemanticTreeService {
             throw new RuntimeException("计算文件MD5失败", e);
         }
         
-        // 检查是否已存在相同MD5的文档
         boolean alreadyExists = false;
         if (semanticTree != null && semanticTree.chunks() != null) {
             alreadyExists = semanticTree.chunks().values().stream()
@@ -351,24 +395,20 @@ public class SemanticTreeService {
             return;
         }
         
-        // 创建文件副本
         Path copiedFile = createDocumentCopy(filePath);
         
-        // 根据文件类型选择合适的处理器
         DocumentProcessor processor = DocumentProcessorFactory.getInstance().getProcessor(filePath.toString());
-        // 使用当前配置
         processor.setConfig(currentConfig);
             
         try {
             List<DocumentChunk> chunks = processor.processDocument(filePath).get();
             
-            // 将文档块转换为基于文件路径的文档块（不存储内容）
             List<DocumentChunk> filePathBasedChunks = chunks.stream()
                 .map(chunk -> DocumentChunk.withFilePath(
                     chunk.id(),
                     chunk.summary(),
                     copiedFile.toString(),
-                    chunk.md5(),  // 传递MD5值
+                    chunk.md5(),
                     chunk.metadata()
                 ))
                 .collect(Collectors.toList());
@@ -405,9 +445,7 @@ public class SemanticTreeService {
      * @param fileName 文件名
      */
     public void addDocument(InputStream inputStream, String fileName) {
-        // 根据文件类型选择合适的处理器
         DocumentProcessor processor = DocumentProcessorFactory.getInstance().getProcessor(fileName);
-        // 使用当前配置
         processor.setConfig(currentConfig);
             
         try {
@@ -424,9 +462,7 @@ public class SemanticTreeService {
      * @param fileName 文件名
      */
     public void addDocument(String content, String fileName) {
-        // 根据文件类型选择合适的处理器
         DocumentProcessor processor = DocumentProcessorFactory.getInstance().getProcessor(fileName);
-        // 使用当前配置
         processor.setConfig(currentConfig);
             
         try {
@@ -443,18 +479,15 @@ public class SemanticTreeService {
      * @return 处理结果的异步Future
      */
     public CompletableFuture<Void> addDocumentsAsync(List<Path> filePaths) {
-        // 过滤掉已存在的文档（基于MD5）
         List<Path> filesToProcess = new ArrayList<>();
         Map<Path, String> md5Map = new HashMap<>();
         
         if (semanticTree != null && semanticTree.chunks() != null) {
-            // 获取所有已存在的MD5值
             Set<String> existingMd5s = semanticTree.chunks().values().stream()
                 .filter(chunk -> chunk.md5() != null)
                 .map(DocumentChunk::md5)
                 .collect(Collectors.toSet());
             
-            // 计算每个文件的MD5并过滤
             for (Path filePath : filePaths) {
                 try {
                     String md5 = cn.nexon.zerovector.core.util.MD5Util.calculateMD5(filePath);
@@ -467,12 +500,10 @@ public class SemanticTreeService {
                     }
                 } catch (IOException e) {
                     logger.error("计算文件MD5失败: {}, 错误: {}", filePath, e.getMessage());
-                    // 即使MD5计算失败，也处理该文件
                     filesToProcess.add(filePath);
                 }
             }
         } else {
-            // 如果没有现有语义树，处理所有文件
             filesToProcess.addAll(filePaths);
         }
         
@@ -483,14 +514,11 @@ public class SemanticTreeService {
         
         List<CompletableFuture<List<DocumentChunk>>> futures = filesToProcess.stream()
             .map(filePath -> {
-                // 根据文件类型选择合适的处理器
                 DocumentProcessor processor = DocumentProcessorFactory.getInstance().getProcessor(filePath.toString());
-                // 使用当前配置
                 processor.setConfig(currentConfig);
                     
                 return processor.processDocument(filePath)
                     .thenApply(chunks -> {
-                        // 将文档块转换为基于文件路径的文档块（不存储内容）
                         String md5 = md5Map.get(filePath);
                         return chunks.stream()
                             .map(chunk -> DocumentChunk.withFilePath(
@@ -607,7 +635,6 @@ public class SemanticTreeService {
             throw new IllegalStateException("Semantic tree not built yet");
         }
         
-        // 优先使用 HybridNavigator，如果不可用则回退到普通 Navigator
         if (hybridNavigator != null) {
             return hybridNavigator.navigate(query);
         } else if (navigator != null) {
@@ -651,7 +678,6 @@ public class SemanticTreeService {
             }
         }
         
-        // 保存关键词字典
         keywordDictionary.saveToFile(dictionaryFilePath);
         logger.info("已保存关键词字典到文件: {}", dictionaryFilePath);
     }
@@ -666,18 +692,15 @@ public class SemanticTreeService {
     }
     
     /**
-     * 关闭服务
+     * 关闭管理器
      */
     public void close() throws IOException {
-        // 保存语义树
         saveTree();
         
-        // 关闭文档存储
         if (documentStore != null) {
             documentStore.close();
         }
         
-        // 关闭分片存储
         if (shardedTreeStorage != null) {
             shardedTreeStorage.close();
         }

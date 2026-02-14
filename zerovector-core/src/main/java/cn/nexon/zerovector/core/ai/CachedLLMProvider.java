@@ -1,5 +1,6 @@
 package cn.nexon.zerovector.core.ai;
 
+import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.NavigationAction;
 import cn.nexon.zerovector.core.model.TreeNode;
@@ -10,12 +11,12 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-public class CachedLLMService implements LLMService {
-    private final LLMService delegate;
+public class CachedLLMProvider implements LLMProvider {
+    private final LLMProvider delegate;
     private final Cache<String, List<String>> listCache;
     private final Cache<String, String> stringCache;
     
-    public CachedLLMService(LLMService delegate) {
+    public CachedLLMProvider(LLMProvider delegate) {
         this.delegate = delegate;
         this.listCache = Caffeine.newBuilder()
             .maximumSize(1000)
@@ -25,6 +26,11 @@ public class CachedLLMService implements LLMService {
             .maximumSize(1000)
             .expireAfterAccess(1, TimeUnit.HOURS)
             .build();
+    }
+    
+    @Override
+    public DocumentComprehendResult comprehendChunk(String prompt, String chunk) {
+        return delegate.comprehendChunk(prompt, chunk);
     }
     
     @Override

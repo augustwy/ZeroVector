@@ -1,6 +1,6 @@
 package cn.nexon.zerovector.core.tree;
 
-import cn.nexon.zerovector.core.ai.LLMService;
+import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 
@@ -19,13 +19,13 @@ public class Navigator {
     private static final int MAX_NAVIGATION_HISTORY = 100;
     
     private final SemanticTree semanticTree;
-    private final LLMService llmService;
+    private final LLMProvider llmService;
     private final MMapDocumentStore documentStore;
     
     private TreeNode currentNode;
     private final List<NavigationPath> navigationHistory;
     
-    public Navigator(SemanticTree semanticTree, LLMService llmService, MMapDocumentStore documentStore) {
+    public Navigator(SemanticTree semanticTree, LLMProvider llmService, MMapDocumentStore documentStore) {
         this.semanticTree = semanticTree;
         this.llmService = llmService;
         this.documentStore = documentStore;

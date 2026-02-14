@@ -1,6 +1,6 @@
 package cn.nexon.zerovector.core.tree;
 
-import cn.nexon.zerovector.core.ai.LLMService;
+import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
@@ -25,24 +25,24 @@ public class TreeBuilder {
     private static final Logger logger = LoggerFactory.getLogger(TreeBuilder.class);
     private static final int CLUSTERING_THRESHOLD = 5;
     
-    private final LLMService llm;
+    private final LLMProvider llm;
     private final KeywordDictionary dictionary;
     private final MMapDocumentStore store;
     private final ConcurrencyProperties concurrencyConfig;
     private final Semaphore requestSemaphore;
 
     // 兼容旧构造函数
-    public TreeBuilder(LLMService llm, KeywordDictionary dictionary, MMapDocumentStore store) {
+    public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store) {
         this(llm, dictionary, store, new ConcurrencyProperties());
     }
     
     // 支持自定义并发配置
-    public TreeBuilder(LLMService llm, KeywordDictionary dictionary, MMapDocumentStore store, int maxConcurrentRequests) {
+    public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store, int maxConcurrentRequests) {
         this(llm, dictionary, store, createDefaultConfig(maxConcurrentRequests));
     }
     
     // 完整构造函数，支持所有并发配置
-    public TreeBuilder(LLMService llm, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
+    public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
         this.llm = llm;
         this.dictionary = dictionary;
         this.store = store;
