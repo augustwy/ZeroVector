@@ -76,23 +76,25 @@ public class ShardedTreeStorage implements AutoCloseable {
      * 保存语义树到分片文件
      */
     public void saveTree(SemanticTree tree) throws IOException {
-        // 清空现有索引
-        nodeShards.clear();
-        chunkShards.clear();
-        
-        // 保存根节点
-        if (tree.rootNode() != null) {
-            saveRootNode(tree.rootNode());
+        synchronized (this) {
+            // 清空现有索引
+            nodeShards.clear();
+            chunkShards.clear();
+            
+            // 保存根节点
+            if (tree.rootNode() != null) {
+                saveRootNode(tree.rootNode());
+            }
+            
+            // 分片保存节点
+            saveNodesInShards(tree.nodes());
+            
+            // 分片保存文档块
+            saveChunksInShards(tree.chunks());
+            
+            // 保存元数据
+            saveMetadata();
         }
-        
-        // 分片保存节点
-        saveNodesInShards(tree.nodes());
-        
-        // 分片保存文档块
-        saveChunksInShards(tree.chunks());
-        
-        // 保存元数据
-        saveMetadata();
     }
     
     /**

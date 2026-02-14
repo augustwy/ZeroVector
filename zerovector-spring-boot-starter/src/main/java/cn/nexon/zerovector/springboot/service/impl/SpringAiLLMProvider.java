@@ -68,22 +68,6 @@ public class SpringAiLLMProvider implements LLMProvider {
     }
 
     @Override
-    public String clusterChunks(String prompt) {
-        try {
-            String response = clusteringClient.prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
-
-            logger.debug("LLM原始响应: {}", response);
-            return response;
-        } catch (Exception e) {
-            logger.error("聚类失败", e);
-            return "{}";
-        }
-    }
-
-    @Override
     public String clusterDocuments(String prompt) {
         try {
             String response = clusteringClient.prompt()
@@ -145,22 +129,6 @@ public class SpringAiLLMProvider implements LLMProvider {
         } catch (Exception e) {
             logger.error("导航决策失败", e);
             return "{}";
-        }
-    }
-
-    @Override
-    public String generateNodeDescription(String prompt) {
-        try {
-            String description = clusteringClient.prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
-
-            logger.debug("生成节点描述成功，描述: {}", description);
-            return description;
-        } catch (Exception e) {
-            logger.error("生成节点描述失败", e);
-            return "包含相关文档的节点";
         }
     }
 }

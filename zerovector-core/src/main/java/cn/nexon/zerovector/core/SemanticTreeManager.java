@@ -120,14 +120,7 @@ public class SemanticTreeManager {
             chunkMap.put(document.id(), chunk);
         }
         
-        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
-        
-        if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
-            this.semanticTree = builder.build(comprehendResultMap, chunkMap);
-        } else {
-            this.semanticTree = builder.updateTree(this.semanticTree, new ArrayList<>(comprehendResultMap.values()), chunkMap);
-        }
-        
+        this.semanticTree = buildTreeInternal(comprehendResultMap, chunkMap);
         this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
         this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
         
@@ -137,6 +130,16 @@ public class SemanticTreeManager {
             saveTree();
         } catch (IOException e) {
             logger.error("保存语义树和关键词字典失败: {}", e.getMessage());
+        }
+    }
+    
+    private SemanticTree buildTreeInternal(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
+        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
+        
+        if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
+            return builder.build(comprehendResultMap, chunkMap);
+        } else {
+            return builder.updateTree(this.semanticTree, new ArrayList<>(comprehendResultMap.values()), chunkMap);
         }
     }
 
@@ -184,15 +187,7 @@ public class SemanticTreeManager {
         Map<String, DocumentChunk> chunkMap = new HashMap<>();
         chunkMap.put(docId, chunk);
         
-        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
-        
-        if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
-            this.semanticTree = builder.build(comprehendResultMap, chunkMap);
-        } else {
-            this.semanticTree = builder.updateTree(this.semanticTree, new ArrayList<>(comprehendResultMap.values()), chunkMap);
-        }
-        this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
-        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
+        updateSemanticTreeFromDocuments(comprehendResultMap, chunkMap);
         
         logger.info("添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
         
@@ -265,15 +260,7 @@ public class SemanticTreeManager {
             chunkMap.put(document.id(), chunk);
         }
         
-        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
-        
-        if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
-            this.semanticTree = builder.build(comprehendResultMap, chunkMap);
-        } else {
-            this.semanticTree = builder.updateTree(this.semanticTree, new ArrayList<>(comprehendResultMap.values()), chunkMap);
-        }
-        this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
-        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
+        updateSemanticTreeFromDocuments(comprehendResultMap, chunkMap);
         
         logger.info("批量添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
         
@@ -303,7 +290,20 @@ public class SemanticTreeManager {
             throw new RuntimeException("创建文档副本失败", e);
         }
     }
-
+    
+    private void updateSemanticTreeFromDocuments(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
+        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
+        
+        if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
+            this.semanticTree = builder.build(comprehendResultMap, chunkMap);
+        } else {
+            this.semanticTree = builder.updateTree(this.semanticTree, new ArrayList<>(comprehendResultMap.values()), chunkMap);
+        }
+        
+        this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
+        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
+    }
+    
     public NavigationResult navigate(String query) {
         if (semanticTree == null) {
             throw new IllegalStateException("Semantic tree not built yet");

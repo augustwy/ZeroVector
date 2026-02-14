@@ -15,30 +15,6 @@ public final class LLMPromptTemplates {
                 """.formatted(title, content);
     }
 
-    public static String clusterChunks(List<String> chunks, int clusterSize) {
-        StringBuilder chunksBuilder = new StringBuilder();
-        for (int i = 0; i < chunks.size(); i++) {
-            chunksBuilder.append("[").append(i).append("] ")
-                    .append(chunks.get(i).substring(0, Math.min(200, chunks.get(i).length())))
-                    .append("\n");
-        }
-
-        return """
-                请将以下文档块聚类为%d个类别。
-                分析每个文档块的内容，根据主题相似性进行分组。
-                %s
-                请按以下JSON格式返回结果:
-                {
-                  "clusters": [
-                    {
-                      "name": "类别名称",
-                      "chunks": [0, 1, 2]
-                    }
-                  ]
-                }
-                """.formatted(clusterSize, chunksBuilder);
-    }
-
     public static String clusterDocumentChunks(List<String> chunks) {
         StringBuilder chunksBuilder = new StringBuilder();
         for (int i = 0; i < chunks.size(); i++) {
@@ -80,24 +56,6 @@ public final class LLMPromptTemplates {
                 返回JSON格式: {"selectedIndex": 0, "reasoning": "选择原因", "confidence": 0.8}
                 如果没有相关子节点，请返回{"selectedIndex": -1, "reasoning": "没有相关子节点", "confidence": 0.0}
                 """.formatted(query, currentNodeName, currentNodeDescription, nodesBuilder);
-    }
-
-    public static String generateNodeDescription(String nodeName, List<String> relatedChunks) {
-        StringBuilder chunksBuilder = new StringBuilder();
-        if (relatedChunks != null && !relatedChunks.isEmpty()) {
-            chunksBuilder.append("相关文档内容：\n");
-            for (int i = 0; i < Math.min(3, relatedChunks.size()); i++) {
-                chunksBuilder.append("- ").append(relatedChunks.get(i)
-                                .substring(0, Math.min(200, relatedChunks.get(i).length())))
-                        .append("\n");
-            }
-        }
-
-        return """
-                请为以下节点生成描述：
-                节点名称：%s
-                %s
-                请生成一个简洁的描述(不超过100字): \n""".formatted(nodeName, chunksBuilder);
     }
 
     public static String extractEntities(String content) {

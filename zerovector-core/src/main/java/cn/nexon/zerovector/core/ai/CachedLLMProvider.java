@@ -32,12 +32,7 @@ public class CachedLLMProvider implements LLMProvider {
     public String generateSummary(String prompt) {
         return stringCache.get("summary:" + prompt.hashCode(), key -> delegate.generateSummary(prompt));
     }
-    
-    @Override
-    public String clusterChunks(String prompt) {
-        return delegate.clusterChunks(prompt);
-    }
-    
+
     @Override
     public String clusterDocuments(String prompt) {
         return delegate.clusterDocuments(prompt);
@@ -61,11 +56,6 @@ public class CachedLLMProvider implements LLMProvider {
     @Override
     public String decideNavigation(String prompt) {
         return delegate.decideNavigation(prompt);
-    }
-    
-    @Override
-    public String generateNodeDescription(String prompt) {
-        return delegate.generateNodeDescription(prompt);
     }
     
     public void clearCache() {

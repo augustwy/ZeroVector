@@ -8,8 +8,6 @@ public interface LLMProvider {
     
     String generateSummary(String prompt);
     
-    String clusterChunks(String prompt);
-    
     String clusterDocuments(String prompt);
     
     String extractKeywords(String prompt);
@@ -19,6 +17,4 @@ public interface LLMProvider {
     String generateExampleQuestions(String prompt);
     
     String decideNavigation(String prompt);
-    
-    String generateNodeDescription(String prompt);
 }

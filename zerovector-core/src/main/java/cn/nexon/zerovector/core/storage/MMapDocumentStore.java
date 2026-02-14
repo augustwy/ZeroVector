@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -42,7 +43,7 @@ public class MMapDocumentStore implements AutoCloseable {
         bufferRef.set(newBuffer);
     }
     
-    private final Map<String, FileLocation> index = new HashMap<>();
+    private final Map<String, FileLocation> index = new ConcurrentHashMap<>();
     
     /**
      * 文件位置记录

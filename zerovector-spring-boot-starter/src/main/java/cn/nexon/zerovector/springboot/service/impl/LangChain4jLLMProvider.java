@@ -53,17 +53,6 @@ public class LangChain4jLLMProvider implements LLMProvider {
     }
 
     @Override
-    public String clusterChunks(String prompt) {
-        try {
-            String result = chatModel.generate(prompt);
-            return result;
-        } catch (Exception e) {
-            logger.error("聚类失败", e);
-            return "{}";
-        }
-    }
-
-    @Override
     public String clusterDocuments(String prompt) {
         try {
             String result = chatModel.generate(prompt);
@@ -115,16 +104,6 @@ public class LangChain4jLLMProvider implements LLMProvider {
         } catch (Exception e) {
             logger.error("导航决策失败", e);
             return "{}";
-        }
-    }
-
-    @Override
-    public String generateNodeDescription(String prompt) {
-        try {
-            return chatModel.generate(prompt);
-        } catch (Exception e) {
-            logger.error("生成节点描述失败", e);
-            return "包含相关文档的节点";
         }
     }
 }

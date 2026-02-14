@@ -59,6 +59,7 @@ public class TreeBuilder {
         updatedChunks.putAll(newChunks);
         
         List<String> chunkIds = new ArrayList<>(newChunks.keySet());
+        TreeNode currentRoot = existingTree.rootNode();
         
         for (int i = 0; i < newResults.size(); i++) {
             DocumentComprehendResult result = newResults.get(i);
@@ -147,12 +148,13 @@ public class TreeBuilder {
                 );
                 
                 updatedNodes.put(root.id(), updatedRoot);
+                currentRoot = updatedRoot;
                 logger.debug("文档 {} 已添加到根节点", chunkId);
             }
         }
         
         logger.info("增量更新完成，语义树包含 {} 个文档，{} 个节点", updatedChunks.size(), updatedNodes.size());
-        return new SemanticTree(existingTree.rootNode(), updatedNodes, updatedChunks);
+        return new SemanticTree(currentRoot, updatedNodes, updatedChunks);
     }
 
     private TreeBuildResult buildRecursiveWithNodes(String name, Map<String, DocumentComprehendResult> documents) {
