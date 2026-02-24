@@ -66,4 +66,13 @@ public interface LLMProvider {
      * @return LLM返回的JSON格式响应，包含选择的子节点索引、推理过程和置信度
      */
     String decideNavigation(String prompt);
+
+    /**
+     * 提取查询关键字
+     * 从用户查询中提取重要的关键词
+     * 
+     * @param prompt 包含用户查询的提示词
+     * @return LLM返回的关键词列表
+     */
+    String extractQueryKeywords(String prompt);
 }

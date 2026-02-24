@@ -54,11 +54,12 @@ public class SemanticTreeManager {
         this.llmProvider = llmProvider;
         this.documentComprehender = documentComprehender;
         this.keywordDictionary = new KeywordDictionary();
-        this.storagePath = Paths.get(storagePath.toString(), "zerovector_storage");
-        this.treeFilePath = this.storagePath.toString() + ".tree";
-        this.treeStorageDir = this.storagePath.toString() + "_shards";
-        this.dictionaryFilePath = this.storagePath.toString() + ".dict";
-        this.documentsDir = this.storagePath.toString() + "_docs";
+        this.storagePath = storagePath;
+        String basePath = Paths.get(storagePath.toString(), "zerovector_storage").toString();
+        this.treeFilePath = basePath + ".tree";
+        this.treeStorageDir = basePath + "_shards";
+        this.dictionaryFilePath = basePath + ".dict";
+        this.documentsDir = basePath + "_docs";
         this.useShardedStorage = useShardedStorage;
         this.concurrencyProperties = concurrencyProperties;
     }

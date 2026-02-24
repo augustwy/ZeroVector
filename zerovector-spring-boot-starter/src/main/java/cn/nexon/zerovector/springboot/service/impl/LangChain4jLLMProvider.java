@@ -106,4 +106,15 @@ public class LangChain4jLLMProvider implements LLMProvider {
             return "{}";
         }
     }
+
+    @Override
+    public String extractQueryKeywords(String prompt) {
+        try {
+            String result = chatModel.generate(prompt);
+            return result;
+        } catch (Exception e) {
+            logger.error("提取查询关键字失败", e);
+            return "";
+        }
+    }
 }

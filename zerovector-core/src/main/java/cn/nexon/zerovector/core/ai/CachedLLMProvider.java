@@ -164,6 +164,12 @@ public class CachedLLMProvider implements LLMProvider {
         return getCachedResult(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, prompt, 
             p -> delegate.decideNavigation(p));
     }
+
+    @Override
+    public String extractQueryKeywords(String prompt) {
+        return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, prompt, 
+            p -> delegate.extractQueryKeywords(p));
+    }
     
     public void clearCache() {
         caches.values().forEach(Cache::invalidateAll);

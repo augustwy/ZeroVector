@@ -38,11 +38,27 @@ public class HybridNavigator {
         navigateMonitor.start();
         
         try {
-            Map<String, Double> candidates = dictionary.matchCandidates(query);
             String fastTrackNodeId = null;
             
-            if (!candidates.isEmpty()) {
-                fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
+            try {
+                String keywordsPrompt = LLMPromptTemplates.extractQueryKeywords(query);
+                String keywordsResponse = llm.extractQueryKeywords(keywordsPrompt);
+                
+                List<String> extractedKeywords = parseKeywordsResponse(keywordsResponse);
+                logger.debug("从查询中提取的关键词: {}", extractedKeywords);
+                
+                if (!extractedKeywords.isEmpty()) {
+                    Map<String, Double> candidates = dictionary.matchCandidatesFromKeywords(extractedKeywords);
+                    if (!candidates.isEmpty()) {
+                        fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("使用大模型提取关键字失败，回退到简单匹配: {}", e.getMessage());
+                Map<String, Double> candidates = dictionary.matchCandidates(query);
+                if (!candidates.isEmpty()) {
+                    fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
+                }
             }
             
             TreeNode currentNode;
@@ -336,6 +352,20 @@ public class HybridNavigator {
             throw new PromptLoadException("decideNavigation", PromptLoadException.ERROR_CODE_PARSE_FAILED, 
                 "Failed to parse navigation decision response", e);
         }
+    }
+
+    private List<String> parseKeywordsResponse(String response) {
+        List<String> keywords = new ArrayList<>();
+        String[] lines = response.split("\n");
+        
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (!trimmed.isEmpty()) {
+                keywords.add(trimmed.toLowerCase());
+            }
+        }
+        
+        return keywords;
     }
     
     private record NavigationDecisionResult(int selectedIndex, String reasoning, double confidence) {}

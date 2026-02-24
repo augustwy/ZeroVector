@@ -126,6 +126,28 @@ public final class KeywordDictionary {
     }
 
     /**
+     * 从关键词列表匹配候选节点
+     * 根据提供的关键词列表匹配相关的节点，并返回节点及其得分
+     * 
+     * @param keywords 关键词列表
+     * @return 节点ID到得分的映射表
+     */
+    public Map<String, Double> matchCandidatesFromKeywords(List<String> keywords) {
+        Map<String, Double> candidateScores = new HashMap<>();
+        
+        keywords.stream()
+            .filter(invertedIndex::containsKey)
+            .forEach(kw -> {
+                double weight = keywordWeights.getOrDefault(kw, 1.0);
+                invertedIndex.get(kw).forEach(nodeId -> 
+                    candidateScores.merge(nodeId, weight, Double::sum)
+                );
+            });
+            
+        return candidateScores;
+    }
+
+    /**
      * 获取最佳候选节点
      * 根据查询字符串返回得分最高的节点
      * 
