@@ -348,38 +348,6 @@ public class ShardedTreeStorage implements AutoCloseable {
     }
     
     /**
-     * 加载所有节点
-     */
-    private void loadAllNodes() throws IOException {
-        // 遍历所有节点分片文件
-        Files.list(Paths.get(storageDir))
-            .filter(path -> path.getFileName().toString().startsWith(NODE_PREFIX))
-            .forEach(path -> {
-                try {
-                    loadNodeShard(path.getFileName().toString());
-                } catch (IOException e) {
-                    logger.error("Failed to load node shard: {}, error: {}", path, e.getMessage());
-                }
-            });
-    }
-    
-    /**
-     * 加载所有文档块
-     */
-    private void loadAllChunks() throws IOException {
-        // 遍历所有文档块分片文件
-        Files.list(Paths.get(storageDir))
-            .filter(path -> path.getFileName().toString().startsWith(CHUNK_PREFIX))
-            .forEach(path -> {
-                try {
-                    loadChunkShard(path.getFileName().toString());
-                } catch (IOException e) {
-                    logger.error("Failed to load chunk shard: {}, error: {}", path, e.getMessage());
-                }
-            });
-    }
-    
-    /**
      * 保存元数据
      */
     private void saveMetadata() throws IOException {

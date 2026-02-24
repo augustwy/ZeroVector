@@ -1,7 +1,10 @@
 package cn.nexon.zerovector.springboot.autoconfigure;
 
 import cn.nexon.zerovector.core.KnowledgeBaseManager;
+import cn.nexon.zerovector.core.ai.CacheConfig;
+import cn.nexon.zerovector.core.ai.CachedLLMProvider;
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMProvider;
 import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMProvider;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
@@ -20,6 +23,9 @@ import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * ZeroVector Spring Boot 自动配置类
@@ -37,9 +43,42 @@ public class ZeroVectorAutoConfiguration {
     static class SpringAiConfiguration {
         
         @Bean
-        @ConditionalOnMissingBean(LLMProvider.class)
+        @ConditionalOnMissingBean(name = "springAiLLMService")
         public LLMProvider springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
             return new SpringAiLLMProvider(chatModel, config.getModel());
+        }
+        
+        @Bean
+        @ConditionalOnMissingBean(LLMProvider.class)
+        public LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
+            if (!config.getCache().isEnabled()) {
+                logger.info("LLM缓存已禁用");
+                return delegate;
+            }
+            
+            Map<SmartCacheStrategy.RequestType, CacheConfig> cacheConfigs = new ConcurrentHashMap<>();
+            cacheConfigs.put(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, 
+                toCacheConfig(config.getCache().getComprehendChunk()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, 
+                toCacheConfig(config.getCache().getGenerateSummary()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, 
+                toCacheConfig(config.getCache().getClusterDocuments()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, 
+                toCacheConfig(config.getCache().getExtractKeywords()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, 
+                toCacheConfig(config.getCache().getExtractEntities()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, 
+                toCacheConfig(config.getCache().getGenerateExampleQuestions()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, 
+                toCacheConfig(config.getCache().getDecideNavigation()));
+            
+            logger.info("LLM缓存已启用，配置: {}", config.getCache());
+            return new CachedLLMProvider(delegate, cacheConfigs);
+        }
+        
+        private CacheConfig toCacheConfig(ZeroVectorProperties.CacheConfig config) {
+            TimeUnit timeUnit = TimeUnit.valueOf(config.getTimeUnit().toUpperCase());
+            return new CacheConfig(config.getMaxSize(), config.getExpireAfterAccess(), timeUnit, true, "");
         }
     }
     
@@ -49,9 +88,42 @@ public class ZeroVectorAutoConfiguration {
     static class Langchain4jConfiguration {
         
         @Bean
-        @ConditionalOnMissingBean(LLMProvider.class)
+        @ConditionalOnMissingBean(name = "langChain4jLLMService")
         public LLMProvider langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
             return new LangChain4jLLMProvider(chatLanguageModel, config.getLangChain4j());
+        }
+        
+        @Bean
+        @ConditionalOnMissingBean(LLMProvider.class)
+        public LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
+            if (!config.getCache().isEnabled()) {
+                logger.info("LLM缓存已禁用");
+                return delegate;
+            }
+            
+            Map<SmartCacheStrategy.RequestType, CacheConfig> cacheConfigs = new ConcurrentHashMap<>();
+            cacheConfigs.put(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, 
+                toCacheConfig(config.getCache().getComprehendChunk()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, 
+                toCacheConfig(config.getCache().getGenerateSummary()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, 
+                toCacheConfig(config.getCache().getClusterDocuments()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, 
+                toCacheConfig(config.getCache().getExtractKeywords()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, 
+                toCacheConfig(config.getCache().getExtractEntities()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, 
+                toCacheConfig(config.getCache().getGenerateExampleQuestions()));
+            cacheConfigs.put(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, 
+                toCacheConfig(config.getCache().getDecideNavigation()));
+            
+            logger.info("LLM缓存已启用，配置: {}", config.getCache());
+            return new CachedLLMProvider(delegate, cacheConfigs);
+        }
+        
+        private CacheConfig toCacheConfig(ZeroVectorProperties.CacheConfig config) {
+            TimeUnit timeUnit = TimeUnit.valueOf(config.getTimeUnit().toUpperCase());
+            return new CacheConfig(config.getMaxSize(), config.getExpireAfterAccess(), timeUnit, true, "");
         }
     }
 

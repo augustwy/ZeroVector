@@ -2,6 +2,11 @@ package cn.nexon.zerovector.springboot.service;
 
 import cn.nexon.zerovector.core.KnowledgeBaseManager;
 import cn.nexon.zerovector.core.SemanticTreeManager;
+import cn.nexon.zerovector.core.ai.CacheConfig;
+import cn.nexon.zerovector.core.ai.CacheStatistics;
+import cn.nexon.zerovector.core.ai.CachedLLMProvider;
+import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.NavigationPath;
@@ -11,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 @Service
@@ -116,6 +122,64 @@ public class SemanticFacade {
             return knowledgeBaseManager.getCurrentKnowledgeBase();
         }
         return knowledgeBaseManager.getKnowledgeBase(knowledgeBaseName);
+    }
+    
+    public void clearCache() {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            cachedProvider.clearCache();
+        }
+    }
+    
+    public void clearCache(SmartCacheStrategy.RequestType type) {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            cachedProvider.clearCache(type);
+        }
+    }
+    
+    public Map<SmartCacheStrategy.RequestType, CacheStatistics> getCacheStatistics() {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            return cachedProvider.getStatistics();
+        }
+        return Map.of();
+    }
+    
+    public CacheStatistics getCacheStatistics(SmartCacheStrategy.RequestType type) {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            return cachedProvider.getStatistics(type);
+        }
+        return null;
+    }
+    
+    public void warmupCache(Map<SmartCacheStrategy.RequestType, List<String>> warmupPrompts) {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            cachedProvider.warmupCache(warmupPrompts);
+        }
+    }
+    
+    public void updateCacheConfig(SmartCacheStrategy.RequestType type, CacheConfig config) {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            cachedProvider.updateCacheConfig(type, config);
+        }
+    }
+    
+    public long getTotalCacheSize() {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            return cachedProvider.getTotalCacheSize();
+        }
+        return 0;
+    }
+    
+    public long getCacheSize(SmartCacheStrategy.RequestType type) {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            return cachedProvider.getCacheSize(type);
+        }
+        return 0;
+    }
+    
+    public void logCacheStatistics() {
+        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
+            cachedProvider.logStatistics();
+        }
     }
     
     public record SearchResult(

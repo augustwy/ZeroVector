@@ -43,6 +43,9 @@ public class ZeroVectorProperties {
     @Valid
     private LLMContext llmContext = new LLMContext();
 
+    @Valid
+    private Cache cache = new Cache();
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -112,6 +115,14 @@ public class ZeroVectorProperties {
         this.llmContext = llmContext;
     }
 
+    public Cache getCache() {
+        return cache;
+    }
+
+    public void setCache(Cache cache) {
+        this.cache = cache;
+    }
+
     /**
      * 模型配置
      */
@@ -154,6 +165,127 @@ public class ZeroVectorProperties {
 
         public void setChunkOverlapTokens(int chunkOverlapTokens) {
             this.chunkOverlapTokens = chunkOverlapTokens;
+        }
+    }
+
+    /**
+     * 缓存配置
+     */
+    public static class Cache {
+        private boolean enabled = true;
+        
+        private CacheConfig comprehendChunk = new CacheConfig(5000L, 4L, "HOURS");
+        private CacheConfig generateSummary = new CacheConfig(2000L, 2L, "HOURS");
+        private CacheConfig clusterDocuments = new CacheConfig(1000L, 6L, "HOURS");
+        private CacheConfig extractKeywords = new CacheConfig(3000L, 8L, "HOURS");
+        private CacheConfig extractEntities = new CacheConfig(3000L, 8L, "HOURS");
+        private CacheConfig generateExampleQuestions = new CacheConfig(2000L, 12L, "HOURS");
+        private CacheConfig decideNavigation = new CacheConfig(5000L, 1L, "HOURS");
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public CacheConfig getComprehendChunk() {
+            return comprehendChunk;
+        }
+
+        public void setComprehendChunk(CacheConfig comprehendChunk) {
+            this.comprehendChunk = comprehendChunk;
+        }
+
+        public CacheConfig getGenerateSummary() {
+            return generateSummary;
+        }
+
+        public void setGenerateSummary(CacheConfig generateSummary) {
+            this.generateSummary = generateSummary;
+        }
+
+        public CacheConfig getClusterDocuments() {
+            return clusterDocuments;
+        }
+
+        public void setClusterDocuments(CacheConfig clusterDocuments) {
+            this.clusterDocuments = clusterDocuments;
+        }
+
+        public CacheConfig getExtractKeywords() {
+            return extractKeywords;
+        }
+
+        public void setExtractKeywords(CacheConfig extractKeywords) {
+            this.extractKeywords = extractKeywords;
+        }
+
+        public CacheConfig getExtractEntities() {
+            return extractEntities;
+        }
+
+        public void setExtractEntities(CacheConfig extractEntities) {
+            this.extractEntities = extractEntities;
+        }
+
+        public CacheConfig getGenerateExampleQuestions() {
+            return generateExampleQuestions;
+        }
+
+        public void setGenerateExampleQuestions(CacheConfig generateExampleQuestions) {
+            this.generateExampleQuestions = generateExampleQuestions;
+        }
+
+        public CacheConfig getDecideNavigation() {
+            return decideNavigation;
+        }
+
+        public void setDecideNavigation(CacheConfig decideNavigation) {
+            this.decideNavigation = decideNavigation;
+        }
+    }
+
+    /**
+     * 缓存配置项
+     */
+    public static class CacheConfig {
+        private long maxSize;
+        private long expireAfterAccess;
+        private String timeUnit;
+
+        public CacheConfig() {
+        }
+
+        public CacheConfig(long maxSize, long expireAfterAccess, String timeUnit) {
+            this.maxSize = maxSize;
+            this.expireAfterAccess = expireAfterAccess;
+            this.timeUnit = timeUnit;
+        }
+
+        public long getMaxSize() {
+            return maxSize;
+        }
+
+        public void setMaxSize(long maxSize) {
+            this.maxSize = maxSize;
+        }
+
+        public long getExpireAfterAccess() {
+            return expireAfterAccess;
+        }
+
+        public void setExpireAfterAccess(long expireAfterAccess) {
+            this.expireAfterAccess = expireAfterAccess;
+        }
+
+        public String getTimeUnit() {
+            return timeUnit;
+        }
+
+        public void setTimeUnit(String timeUnit) {
+            this.timeUnit = timeUnit;
         }
     }
 }

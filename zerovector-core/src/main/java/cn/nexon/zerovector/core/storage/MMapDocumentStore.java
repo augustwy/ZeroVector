@@ -1,7 +1,9 @@
 package cn.nexon.zerovector.core.storage;
 
+import cn.nexon.zerovector.core.exception.CacheException;
 import cn.nexon.zerovector.core.exception.StorageException;
 import cn.nexon.zerovector.core.model.DocumentChunk;
+import cn.nexon.zerovector.core.util.PerformanceMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,10 +23,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-/**
- * 内存映射文档存储引擎
- * 实现大纲中的高性能存储方案，利用mmap处理大文件
- */
 public class MMapDocumentStore implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(MMapDocumentStore.class);
     private static final int INITIAL_BUFFER_SIZE = 1024 * 1024;
@@ -45,9 +43,6 @@ public class MMapDocumentStore implements AutoCloseable {
     
     private final Map<String, FileLocation> index = new ConcurrentHashMap<>();
     
-    /**
-     * 文件位置记录
-     */
     public record FileLocation(long offset, int length) {}
     
     private MMapDocumentStore(RandomAccessFile file, MappedByteBuffer buffer, String dataFilePath, String indexFilePath) {
@@ -57,35 +52,41 @@ public class MMapDocumentStore implements AutoCloseable {
         this.indexFilePath = indexFilePath;
     }
     
-    /**
-     * 打开或创建文档存储
-     */
     public static MMapDocumentStore open(String filePath) throws IOException {
-        RandomAccessFile file = new RandomAccessFile(filePath, "rw");
-        if (file.length() == 0) {
-            file.setLength(INITIAL_BUFFER_SIZE);
+        try {
+            RandomAccessFile file = new RandomAccessFile(filePath, "rw");
+            if (file.length() == 0) {
+                file.setLength(INITIAL_BUFFER_SIZE);
+            }
+            
+            MappedByteBuffer buffer = file.getChannel().map(
+                FileChannel.MapMode.READ_WRITE, 0, file.length());
+            
+            String indexFilePath = filePath + ".index";
+            MMapDocumentStore store = new MMapDocumentStore(file, buffer, filePath, indexFilePath);
+            store.loadIndex();
+            return store;
+        } catch (IOException e) {
+            throw new StorageException(filePath, "open", e);
         }
-        
-        MappedByteBuffer buffer = file.getChannel().map(
-            FileChannel.MapMode.READ_WRITE, 0, file.length());
-        
-        String indexFilePath = filePath + ".index";
-        MMapDocumentStore store = new MMapDocumentStore(file, buffer, filePath, indexFilePath);
-        store.loadIndex();
-        return store;
     }
     
-    /**
-     * 添加文档块并返回其位置
-     */
     public FileLocation addChunk(String chunkId, String content) throws IOException {
+        PerformanceMonitor writeMonitor = new PerformanceMonitor("MMapDocumentStore.addChunk");
+        writeMonitor.start();
+        
         lock.writeLock().lock();
         try {
             byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
             MappedByteBuffer currentBuffer = buffer();
             
             if (currentBuffer.position() + 4 + contentBytes.length > currentBuffer.capacity()) {
+                PerformanceMonitor expandMonitor = new PerformanceMonitor("MMapDocumentStore.expandBuffer");
+                expandMonitor.start();
                 expandBuffer(currentBuffer.capacity() * 2);
+                expandMonitor.stop();
+                logger.debug("缓冲区扩展耗时: {}ms, 新大小: {}MB", 
+                        expandMonitor.getDurationMillis(), (currentBuffer.capacity() * 2) / (1024 * 1024));
                 currentBuffer = buffer();
             }
             
@@ -98,22 +99,30 @@ public class MMapDocumentStore implements AutoCloseable {
             FileLocation location = new FileLocation(offset, length);
             index.put(chunkId, location);
             
+            writeMonitor.stop();
+            logger.debug("文档块写入耗时: {}ms, chunkId: {}, 大小: {} bytes", 
+                    writeMonitor.getDurationMillis(), chunkId, length);
+            
             return location;
+        } catch (Exception e) {
+            throw new CacheException(chunkId, "addChunk", CacheException.ERROR_CODE_PUT_FAILED, 
+                "Failed to add chunk to store", e);
         } finally {
             lock.writeLock().unlock();
         }
     }
     
-    /**
-     * 获取文档块内容
-     * [KEY] 零拷贝读取，极快
-     * [CRITICAL] 使用 slice 创建独立视图，避免多线程竞争 buffer position
-     */
     public String getChunk(String chunkId) {
+        PerformanceMonitor readMonitor = new PerformanceMonitor("MMapDocumentStore.getChunk");
+        readMonitor.start();
+        
         lock.readLock().lock();
         try {
             FileLocation loc = index.get(chunkId);
-            if (loc == null) return null;
+            if (loc == null) {
+                throw new CacheException(chunkId, "getChunk", CacheException.ERROR_CODE_KEY_NOT_FOUND, 
+                    "Chunk not found in store");
+            }
             
             MappedByteBuffer sliceBuffer = buffer().duplicate();
             sliceBuffer.position((int) loc.offset());
@@ -123,15 +132,19 @@ public class MMapDocumentStore implements AutoCloseable {
             byte[] bytes = new byte[length];
             sliceBuffer.get(bytes);
             
+            readMonitor.stop();
+            logger.debug("文档块读取耗时: {}ms, chunkId: {}, 大小: {} bytes", 
+                    readMonitor.getDurationMillis(), chunkId, length);
+            
             return new String(bytes, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new CacheException(chunkId, "getChunk", CacheException.ERROR_CODE_GET_FAILED, 
+                "Failed to get chunk from store", e);
         } finally {
             lock.readLock().unlock();
         }
     }
     
-    /**
-     * 获取文档块内容，支持文件路径
-     */
     public String getChunkContent(DocumentChunk chunk) {
         if (chunk.isFilePathBased()) {
             try {
@@ -144,56 +157,51 @@ public class MMapDocumentStore implements AutoCloseable {
         }
     }
     
-    /**
-     * 扩展缓冲区大小
-     */
     private void expandBuffer(long newSize) throws IOException {
-        MappedByteBuffer oldBuffer = buffer();
-        oldBuffer.force();
-        
-        long oldSize = file.length();
-        int oldPosition = oldBuffer.position();
-        
-        file.setLength(newSize);
-        MappedByteBuffer newBuffer = file.getChannel().map(
-            FileChannel.MapMode.READ_WRITE, 0, newSize);
-        
-        oldBuffer.rewind();
-        newBuffer.put(oldBuffer);
-        
-        newBuffer.position(oldPosition);
-        
-        setBuffer(newBuffer);
-        
         try {
-            Field cleanerField = oldBuffer.getClass().getDeclaredField("cleaner");
-            cleanerField.setAccessible(true);
-            Object cleaner = cleanerField.get(oldBuffer);
-            if (cleaner != null) {
-                cleaner.getClass().getMethod("clean").invoke(cleaner);
+            MappedByteBuffer oldBuffer = buffer();
+            oldBuffer.force();
+            
+            long oldSize = file.length();
+            int oldPosition = oldBuffer.position();
+            
+            file.setLength(newSize);
+            MappedByteBuffer newBuffer = file.getChannel().map(
+                FileChannel.MapMode.READ_WRITE, 0, newSize);
+            
+            oldBuffer.rewind();
+            newBuffer.put(oldBuffer);
+            
+            newBuffer.position(oldPosition);
+            
+            setBuffer(newBuffer);
+            
+            try {
+                Field cleanerField = oldBuffer.getClass().getDeclaredField("cleaner");
+                cleanerField.setAccessible(true);
+                Object cleaner = cleanerField.get(oldBuffer);
+                if (cleaner != null) {
+                    cleaner.getClass().getMethod("clean").invoke(cleaner);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to clean old buffer: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            logger.warn("Failed to clean old buffer: {}", e.getMessage());
+        } catch (IOException e) {
+            throw new StorageException(dataFilePath, "expandBuffer", e);
         }
     }
     
-    /**
-     * 加载索引
-     */
     private void loadIndex() {
         Path indexPath = Paths.get(indexFilePath);
         if (!Files.exists(indexPath)) {
-            // 索引文件不存在，创建空索引
             index.clear();
             return;
         }
         
         try {
-            // 读取索引文件内容
             String indexContent = Files.readString(indexPath);
             String[] lines = indexContent.split("\n");
             
-            // 解析每一行：chunkId,offset,length
             for (String line : lines) {
                 if (line.trim().isEmpty()) continue;
                 
@@ -209,19 +217,17 @@ public class MMapDocumentStore implements AutoCloseable {
             
             logger.info("已加载 {} 个文档块索引", index.size());
         } catch (IOException e) {
-            logger.error("加载索引失败: {}", e.getMessage());
-            index.clear();
+            throw new StorageException(indexFilePath, "loadIndex", e);
+        } catch (Exception e) {
+            throw new CacheException("unknown", "loadIndex", CacheException.ERROR_CODE_DESERIALIZATION_FAILED, 
+                "Failed to parse index file", e);
         }
     }
     
-    /**
-     * 保存索引
-     */
     public void saveIndex() {
         try {
             StringBuilder sb = new StringBuilder();
             
-            // 将索引格式化为：chunkId,offset,length
             for (Map.Entry<String, FileLocation> entry : index.entrySet()) {
                 String chunkId = entry.getKey();
                 FileLocation location = entry.getValue();
@@ -234,18 +240,21 @@ public class MMapDocumentStore implements AutoCloseable {
                   .append("\n");
             }
             
-            // 写入索引文件
             Files.writeString(Paths.get(indexFilePath), sb.toString());
-            logger.info("已保存 {} 个文档块索引", index.size());
+            logger.debug("已保存 {} 个文档块索引", index.size());
         } catch (IOException e) {
-            logger.error("保存索引失败: {}", e.getMessage());
+            throw new StorageException(indexFilePath, "saveIndex", e);
         }
     }
     
     @Override
     public void close() throws IOException {
-        saveIndex();
-        buffer().force();
-        if (file != null) file.close();
+        try {
+            saveIndex();
+            buffer().force();
+            if (file != null) file.close();
+        } catch (IOException e) {
+            throw new StorageException(dataFilePath, "close", e);
+        }
     }
 }

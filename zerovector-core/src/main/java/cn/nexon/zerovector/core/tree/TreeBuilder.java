@@ -7,9 +7,11 @@ import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
+import cn.nexon.zerovector.core.util.JsonUtils;
+import cn.nexon.zerovector.core.util.PerformanceMonitor;
+import cn.nexon.zerovector.core.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -22,30 +24,43 @@ public class TreeBuilder {
     private final LLMProvider llm;
     private final KeywordDictionary dictionary;
     private final MMapDocumentStore store;
-    private final ConcurrencyProperties concurrencyConfig;
 
     public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
         this.llm = llm;
         this.dictionary = dictionary;
         this.store = store;
-        this.concurrencyConfig = concurrencyConfig;
     }
 
     public SemanticTree build(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunks) {
+        PerformanceMonitor buildMonitor = new PerformanceMonitor("TreeBuilder.build");
+        buildMonitor.start();
+        
         logger.info("开始构建语义树，共 {} 个文档", comprehendResultMap.size());
         
         TreeBuildResult result = buildRecursiveWithNodes("Root", comprehendResultMap);
         TreeNode root = result.root();
         
-        logger.info("语义树构建完成，包含 {} 个文档，{} 个节点", comprehendResultMap.size(), result.nodes().size());
+        buildMonitor.stop();
+        logger.info("语义树构建完成，包含 {} 个文档，{} 个节点, 总耗时: {}ms", 
+                comprehendResultMap.size(), result.nodes().size(), buildMonitor.getDurationMillis());
+        
         return new SemanticTree(root, result.nodes(), chunks);
     }
 
+    /**
+     * 更新语义树
+     * 在现有语义树的基础上增量添加新文档，优化树结构
+     * 
+     * @param existingTree 现有的语义树
+     * @param newResults 新文档的理解结果列表
+     * @param newChunks 新文档的文档块映射表
+     * @return 更新后的语义树
+     */
     public SemanticTree updateTree(SemanticTree existingTree, List<DocumentComprehendResult> newResults, Map<String, DocumentChunk> newChunks) {
         logger.info("开始增量更新语义树，共 {} 个新文档", newResults.size());
         
         if (existingTree == null || existingTree.rootNode() == null) {
-            logger.info("现有语义树为空，执行完整构建");
+            logger.debug("现有语义树为空，执行完整构建");
             Map<String, DocumentComprehendResult> resultMap = new HashMap<>();
             for (int i = 0; i < newResults.size(); i++) {
                 DocumentComprehendResult result = newResults.get(i);
@@ -72,40 +87,86 @@ public class TreeBuilder {
                 continue;
             }
             
-            TreeNode targetNode = findBestNodeForDocument(existingTree.rootNode(), existingTree, result);
+            TreeNode targetNode = findBestNodeForDocument(currentRoot, existingTree, result);
             
             if (targetNode != null) {
                 if (targetNode.isLeaf()) {
-                    List<String> newChunkIds = new ArrayList<>(targetNode.chunkIds());
-                    newChunkIds.add(chunkId);
-                    
-                    List<String> allKeywords = new ArrayList<>(targetNode.keywords());
-                    List<String> allEntities = new ArrayList<>(targetNode.keyEntities());
-                    List<String> allExamples = new ArrayList<>(targetNode.exampleQuestions());
-                    
-                    List<String> docKeywords = result.keywordDefinitions().stream()
-                        .map(kd -> kd.keyword())
-                        .collect(Collectors.toList());
-                    allKeywords.addAll(docKeywords);
-                    allEntities.addAll(result.entities());
-                    allExamples.addAll(result.exampleQuestions());
-                    
-                    dictionary.addEntries(docKeywords, targetNode.id());
-                    
-                    TreeNode updatedLeafNode = new TreeNode(
-                        targetNode.id(),
-                        targetNode.name(),
-                        targetNode.description(),
-                        NodeType.LEAF,
-                        targetNode.childrenIds(),
-                        newChunkIds,
-                        allEntities,
-                        allKeywords,
-                        allExamples
-                    );
-                    
-                    updatedNodes.put(targetNode.id(), updatedLeafNode);
-                    logger.debug("文档 {} 已添加到叶子节点 {}", chunkId, targetNode.name());
+                    if (targetNode.chunkIds().isEmpty()) {
+                        List<String> newChunkIds = new ArrayList<>();
+                        newChunkIds.add(chunkId);
+                        
+                        List<String> allKeywords = new ArrayList<>(targetNode.keywords());
+                        List<String> allEntities = new ArrayList<>(targetNode.keyEntities());
+                        List<String> allExamples = new ArrayList<>(targetNode.exampleQuestions());
+                        
+                        List<String> docKeywords = result.keywordDefinitions().stream()
+                            .map(kd -> kd.keyword())
+                            .collect(Collectors.toList());
+                        allKeywords.addAll(docKeywords);
+                        allEntities.addAll(result.entities());
+                        allExamples.addAll(result.exampleQuestions());
+                        
+                        dictionary.addEntries(docKeywords, targetNode.id());
+                        
+                        TreeNode updatedLeafNode = new TreeNode(
+                            targetNode.id(),
+                            targetNode.name(),
+                            targetNode.description(),
+                            NodeType.LEAF,
+                            targetNode.childrenIds(),
+                            newChunkIds,
+                            allEntities,
+                            allKeywords,
+                            allExamples
+                        );
+                        
+                        updatedNodes.put(targetNode.id(), updatedLeafNode);
+                        logger.debug("文档 {} 已添加到叶子节点 {}", chunkId, targetNode.name());
+                    } else {
+                        TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
+                        updatedNodes.put(newLeafNode.id(), newLeafNode);
+                        
+                        String originalChunkId = targetNode.chunkIds().get(0);
+                        DocumentChunk originalChunk = existingTree.chunks().get(originalChunkId);
+                        
+                        List<String> newChildrenIds = new ArrayList<>();
+                        
+                        if (originalChunk != null) {
+                            TreeNode originalLeafNode = createLeafNodeForDocument(originalChunkId, originalChunk);
+                            updatedNodes.put(originalLeafNode.id(), originalLeafNode);
+                            newChildrenIds.add(originalLeafNode.id());
+                        }
+                        
+                        newChildrenIds.add(newLeafNode.id());
+                        
+                        List<String> allKeywords = new ArrayList<>(targetNode.keywords());
+                        List<String> docKeywords = result.keywordDefinitions().stream()
+                            .map(kd -> kd.keyword())
+                            .collect(Collectors.toList());
+                        allKeywords.addAll(docKeywords);
+                        
+                        dictionary.addEntries(docKeywords, targetNode.id());
+                        
+                        TreeNode updatedCategoryNode = new TreeNode(
+                            targetNode.id(),
+                            targetNode.name(),
+                            "Category node containing " + (targetNode.chunkIds().size() + 1) + " documents",
+                            NodeType.CATEGORY,
+                            newChildrenIds,
+                            List.of(),
+                            targetNode.keyEntities(),
+                            allKeywords,
+                            targetNode.exampleQuestions()
+                        );
+                        
+                        updatedNodes.put(targetNode.id(), updatedCategoryNode);
+                        
+                        if (targetNode.id().equals(currentRoot.id())) {
+                            currentRoot = updatedCategoryNode;
+                        }
+                        
+                        logger.debug("文档 {} 已添加到叶子节点 {}，将叶子节点转换为分类节点", chunkId, targetNode.name());
+                    }
                 } else {
                     TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
                     updatedNodes.put(newLeafNode.id(), newLeafNode);
@@ -132,9 +193,12 @@ public class TreeBuilder {
                 TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
                 updatedNodes.put(newLeafNode.id(), newLeafNode);
                 
-                TreeNode root = existingTree.rootNode();
+                TreeNode root = currentRoot;
                 List<String> newChildrenIds = new ArrayList<>(root.childrenIds());
                 newChildrenIds.add(newLeafNode.id());
+                
+                List<String> newChunkIds = new ArrayList<>(root.chunkIds());
+                newChunkIds.add(chunkId);
                 
                 TreeNode updatedRoot = new TreeNode(
                     root.id(),
@@ -142,7 +206,7 @@ public class TreeBuilder {
                     root.description(),
                     NodeType.CATEGORY,
                     newChildrenIds,
-                    root.chunkIds(),
+                    newChunkIds,
                     root.keyEntities(),
                     root.keywords(),
                     root.exampleQuestions()
@@ -162,145 +226,139 @@ public class TreeBuilder {
         Map<String, TreeNode> allNodes = new ConcurrentHashMap<>();
         
         if (documents.size() <= CLUSTERING_THRESHOLD) {
-            try {
-                List<String> summaries = documents.values().stream()
-                    .map(DocumentComprehendResult::summary)
-                    .toList();
-                String clusterPrompt = LLMPromptTemplates.clusterDocumentChunks(summaries);
-                String response = llm.clusterDocuments(clusterPrompt);
-                List<NodeCategory> categories = parseClusterResponse(response, documents);
-                
-                if (categories.size() == 1 && categories.get(0).getDocuments().size() == documents.size()) {
-                    TreeNode leafNode = createLeafNode(name, categories.get(0).getDocuments());
-                    allNodes.put(leafNode.id(), leafNode);
-                    return new TreeBuildResult(leafNode, allNodes);
-                }
-                
-                if (categories.size() > 1) {
-                    List<String> childIds = new ArrayList<>();
-                    
-                    for (NodeCategory cat : categories) {
-                        String summariesText = cat.getDocuments().values().stream()
-                            .map(DocumentComprehendResult::summary)
-                            .collect(Collectors.joining(" "));
-                        
-                        String keywordsPrompt = LLMPromptTemplates.extractKeywords(summariesText);
-                        String entitiesPrompt = LLMPromptTemplates.extractEntities(summariesText);
-                        String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
-                        
-                        List<String> keywords = parseListResponse(llm.extractKeywords(keywordsPrompt));
-                        List<String> entities = parseListResponse(llm.extractEntities(entitiesPrompt));
-                        List<String> examples = parseListResponse(llm.generateExampleQuestions(examplesPrompt));
-                        
-                        dictionary.addEntries(keywords, cat.getNodeId());
-                        
-                        TreeBuildResult childResult = buildRecursiveWithNodes(cat.getName(), cat.getDocuments());
-                        TreeNode childNode = childResult.root();
-                        childIds.add(childNode.id());
-                        
-                        allNodes.putAll(childResult.nodes());
-                    }
-                    
-                    String nodeId = UUID.randomUUID().toString();
-                    String allSummaries = documents.values().stream()
-                        .map(DocumentComprehendResult::summary)
-                        .collect(Collectors.joining(" "));
-                    
-                    String nodeKeywordsPrompt = LLMPromptTemplates.extractKeywords(allSummaries);
-                    String nodeEntitiesPrompt = LLMPromptTemplates.extractEntities(allSummaries);
-                    String nodeExamplesPrompt = LLMPromptTemplates.generateExampleQuestions(allSummaries);
-                    
-                    List<String> nodeKeywords = parseListResponse(llm.extractKeywords(nodeKeywordsPrompt));
-                    List<String> nodeEntities = parseListResponse(llm.extractEntities(nodeEntitiesPrompt));
-                    List<String> nodeExamples = parseListResponse(llm.generateExampleQuestions(nodeExamplesPrompt));
-                    
-                    dictionary.addEntries(nodeKeywords, nodeId);
-                    
-                    TreeNode currentNode = new TreeNode(
-                        nodeId,
-                        name,
-                        "Category node containing " + categories.size() + " subcategories",
-                        NodeType.CATEGORY,
-                        childIds,
-                        List.of(),
-                        nodeEntities,
-                        nodeKeywords,
-                        nodeExamples
-                    );
-                    
-                    allNodes.put(nodeId, currentNode);
-                    return new TreeBuildResult(currentNode, allNodes);
-                }
-            } catch (Exception e) {
-                logger.warn("聚类失败，创建叶子节点: {}", e.getMessage());
-            }
-            
-            TreeNode leafNode = createLeafNode(name, documents);
-            allNodes.put(leafNode.id(), leafNode);
-            return new TreeBuildResult(leafNode, allNodes);
+            return buildSmallDocumentSet(name, documents, allNodes);
         }
         
+        return buildLargeDocumentSet(name, documents, allNodes);
+    }
+
+    private TreeBuildResult buildSmallDocumentSet(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes) {
+        try {
+            List<NodeCategory> categories = performDocumentClustering(documents);
+            
+            if (shouldCreateSingleLeafNode(categories, documents)) {
+                return createSingleLeafNodeResult(name, categories.get(0).getDocuments(), allNodes);
+            }
+            
+            if (categories.size() > 1) {
+                return buildMultiCategoryTree(name, documents, categories, allNodes);
+            }
+        } catch (Exception e) {
+            logger.warn("聚类失败，创建叶子节点: {}", e.getMessage());
+        }
+        
+        return createSingleLeafNodeResult(name, documents, allNodes);
+    }
+
+    private TreeBuildResult buildLargeDocumentSet(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes) {
+        List<NodeCategory> categories = performDocumentClustering(documents);
+        return buildMultiCategoryTree(name, documents, categories, allNodes);
+    }
+
+    private List<NodeCategory> performDocumentClustering(Map<String, DocumentComprehendResult> documents) {
         List<String> summaries = documents.values().stream()
             .map(DocumentComprehendResult::summary)
             .toList();
+        
+        PerformanceMonitor clusterMonitor = new PerformanceMonitor("TreeBuilder.clusterDocuments");
+        clusterMonitor.start();
         String clusterPrompt = LLMPromptTemplates.clusterDocumentChunks(summaries);
         String response = llm.clusterDocuments(clusterPrompt);
-        List<NodeCategory> categories = parseClusterResponse(response, documents);
+        clusterMonitor.stop();
         
+        logger.debug("聚类操作耗时: {}ms", clusterMonitor.getDurationMillis());
+        
+        return parseClusterResponse(response, documents);
+    }
+
+    private boolean shouldCreateSingleLeafNode(List<NodeCategory> categories, Map<String, DocumentComprehendResult> documents) {
+        return categories.size() == 1 && categories.get(0).getDocuments().size() == documents.size();
+    }
+
+    private TreeBuildResult createSingleLeafNodeResult(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes) {
+        TreeNode leafNode = createLeafNode(name, documents);
+        allNodes.put(leafNode.id(), leafNode);
+        return new TreeBuildResult(leafNode, allNodes);
+    }
+
+    private TreeBuildResult buildMultiCategoryTree(String name, Map<String, DocumentComprehendResult> documents, List<NodeCategory> categories, Map<String, TreeNode> allNodes) {
         List<String> childIds = new ArrayList<>();
         
         for (NodeCategory cat : categories) {
-            String summariesText = cat.getDocuments().values().stream()
-                .map(DocumentComprehendResult::summary)
-                .collect(Collectors.joining(" "));
-            
-            String keywordsPrompt = LLMPromptTemplates.extractKeywords(summariesText);
-            String entitiesPrompt = LLMPromptTemplates.extractEntities(summariesText);
-            String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
-            
-            List<String> keywords = parseListResponse(llm.extractKeywords(keywordsPrompt));
-            List<String> entities = parseListResponse(llm.extractEntities(entitiesPrompt));
-            List<String> examples = parseListResponse(llm.generateExampleQuestions(examplesPrompt));
-            
-            dictionary.addEntries(keywords, cat.getNodeId());
-            
-            TreeBuildResult childResult = buildRecursiveWithNodes(cat.getName(), cat.getDocuments());
-            TreeNode childNode = childResult.root();
-            childIds.add(childNode.id());
-            
-            allNodes.putAll(childResult.nodes());
+            processCategory(cat, allNodes, childIds);
         }
         
+        TreeNode categoryNode = buildCategoryNode(name, documents, categories.size(), childIds);
+        allNodes.put(categoryNode.id(), categoryNode);
+        
+        return new TreeBuildResult(categoryNode, allNodes);
+    }
+
+    private void processCategory(NodeCategory cat, Map<String, TreeNode> allNodes, List<String> childIds) {
+        String summariesText = StringUtils.joinWithSpace(
+            cat.getDocuments().values().stream()
+                .map(DocumentComprehendResult::summary)
+                .toList()
+        );
+        
+        NodeMetadata metadata = extractNodeMetadata(summariesText);
+        
+        logger.debug("关键词提取耗时: {}ms, 节点: {}", metadata.extractionTime(), cat.getName());
+        
+        dictionary.addEntries(metadata.keywords(), cat.getNodeId());
+        
+        TreeBuildResult childResult = buildRecursiveWithNodes(cat.getName(), cat.getDocuments());
+        TreeNode childNode = childResult.root();
+        childIds.add(childNode.id());
+        
+        allNodes.putAll(childResult.nodes());
+    }
+
+    private TreeNode buildCategoryNode(String name, Map<String, DocumentComprehendResult> documents, int categoryCount, List<String> childIds) {
         String nodeId = UUID.randomUUID().toString();
-        String allSummaries = documents.values().stream()
-            .map(DocumentComprehendResult::summary)
-            .collect(Collectors.joining(" "));
+        String allSummaries = StringUtils.joinWithSpace(
+            documents.values().stream()
+                .map(DocumentComprehendResult::summary)
+                .toList()
+        );
         
-        String nodeKeywordsPrompt = LLMPromptTemplates.extractKeywords(allSummaries);
-        String nodeEntitiesPrompt = LLMPromptTemplates.extractEntities(allSummaries);
-        String nodeExamplesPrompt = LLMPromptTemplates.generateExampleQuestions(allSummaries);
+        NodeMetadata metadata = extractNodeMetadata(allSummaries);
         
-        List<String> nodeKeywords = parseListResponse(llm.extractKeywords(nodeKeywordsPrompt));
-        List<String> nodeEntities = parseListResponse(llm.extractEntities(nodeEntitiesPrompt));
-        List<String> nodeExamples = parseListResponse(llm.generateExampleQuestions(nodeExamplesPrompt));
+        logger.debug("节点关键词提取耗时: {}ms", metadata.extractionTime());
         
-        dictionary.addEntries(nodeKeywords, nodeId);
+        dictionary.addEntries(metadata.keywords(), nodeId);
         
-        TreeNode currentNode = new TreeNode(
+        return new TreeNode(
             nodeId,
             name,
-            "Category node containing " + categories.size() + " subcategories",
+            "Category node containing " + categoryCount + " subcategories",
             NodeType.CATEGORY,
             childIds,
             List.of(),
-            nodeEntities,
-            nodeKeywords,
-            nodeExamples
+            metadata.entities(),
+            metadata.keywords(),
+            metadata.examples()
         );
-        
-        allNodes.put(nodeId, currentNode);
-        return new TreeBuildResult(currentNode, allNodes);
     }
+
+    private NodeMetadata extractNodeMetadata(String summariesText) {
+        PerformanceMonitor keywordsMonitor = new PerformanceMonitor("TreeBuilder.extractKeywords");
+        keywordsMonitor.start();
+        
+        String keywordsPrompt = LLMPromptTemplates.extractKeywords(summariesText);
+        String entitiesPrompt = LLMPromptTemplates.extractEntities(summariesText);
+        String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
+        
+        List<String> keywords = parseListResponse(llm.extractKeywords(keywordsPrompt));
+        List<String> entities = parseListResponse(llm.extractEntities(entitiesPrompt));
+        List<String> examples = parseListResponse(llm.generateExampleQuestions(examplesPrompt));
+        
+        keywordsMonitor.stop();
+        
+        return new NodeMetadata(keywords, entities, examples, keywordsMonitor.getDurationMillis());
+    }
+
+    private record NodeMetadata(List<String> keywords, List<String> entities, List<String> examples, long extractionTime) {}
 
     private TreeNode createLeafNode(String name, Map<String, DocumentComprehendResult> documents) {
         String nodeId = UUID.randomUUID().toString();
@@ -346,7 +404,7 @@ public class TreeBuilder {
         
         return new TreeNode(
             nodeId,
-            result.summary().substring(0, Math.min(50, result.summary().length())),
+            StringUtils.truncate(result.summary(), 50),
             "Document: " + docId,
             NodeType.LEAF,
             List.of(),
@@ -354,6 +412,22 @@ public class TreeBuilder {
             result.entities(),
             keywords,
             result.exampleQuestions()
+        );
+    }
+
+    private TreeNode createLeafNodeForDocument(String docId, DocumentChunk chunk) {
+        String nodeId = UUID.randomUUID().toString();
+        
+        return new TreeNode(
+            nodeId,
+            StringUtils.truncate(chunk.summary(), 50),
+            "Document: " + docId,
+            NodeType.LEAF,
+            List.of(),
+            List.of(docId),
+            List.of(),
+            List.of(),
+            List.of()
         );
     }
 
@@ -426,8 +500,7 @@ public class TreeBuilder {
     
     private List<NodeCategory> parseClusterResponse(String response, Map<String, DocumentComprehendResult> documents) {
         try {
-            ObjectMapper objectMapper = new ObjectMapper();
-            ClusterResponse result = objectMapper.readValue(response, ClusterResponse.class);
+            ClusterResponse result = JsonUtils.parseJson(response, ClusterResponse.class);
             
             List<NodeCategory> categories = new ArrayList<>();
             List<String> docIds = new ArrayList<>(documents.keySet());
@@ -461,14 +534,7 @@ public class TreeBuilder {
     }
     
     private List<String> parseListResponse(String response) {
-        try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            StringListResponse result = objectMapper.readValue(response, StringListResponse.class);
-            return result.items();
-        } catch (Exception e) {
-            logger.error("解析列表响应失败: {}", e.getMessage());
-            return List.of();
-        }
+        return JsonUtils.parseStringList(response);
     }
     
     private List<NodeCategory> createDefaultCategories(Map<String, DocumentComprehendResult> documents) {
@@ -500,7 +566,6 @@ public class TreeBuilder {
     
     private record ClusterResponse(List<Cluster> clusters) {}
     private record Cluster(String name, List<Integer> chunkIndices) {}
-    private record StringListResponse(List<String> items) {}
     
     public static class NodeCategory {
         private final String nodeId;

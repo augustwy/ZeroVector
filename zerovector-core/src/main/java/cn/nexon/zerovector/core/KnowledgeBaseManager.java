@@ -3,6 +3,7 @@ package cn.nexon.zerovector.core;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
+import cn.nexon.zerovector.core.exception.StorageException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +46,11 @@ public class KnowledgeBaseManager {
 
         logger.info("开始初始化知识库管理器，基础存储路径: {}", baseStoragePath.toAbsolutePath());
 
-        Files.createDirectories(baseStoragePath);
+        try {
+            Files.createDirectories(baseStoragePath);
+        } catch (IOException e) {
+            throw new StorageException(baseStoragePath.toString(), "initialize", e);
+        }
 
         try {
             loadExistingKnowledgeBases();
@@ -104,8 +109,7 @@ public class KnowledgeBaseManager {
 
             logger.info("成功加载 {} 个已存在的知识库", loadedCount);
         } catch (IOException e) {
-            logger.error("扫描知识库目录失败: {}", e.getMessage());
-            throw e;
+            throw new StorageException(baseStoragePath.toString(), "loadExistingKnowledgeBases", e);
         }
     }
 
@@ -131,8 +135,7 @@ public class KnowledgeBaseManager {
 
             logger.info("知识库 {} 加载成功", name);
         } catch (IOException e) {
-            logger.error("加载知识库 {} 失败: {}, 错误: {}", name, storagePath, e.getMessage());
-            throw e;
+            throw new StorageException(storagePath.toString(), "loadKnowledgeBase", e);
         }
     }
 
@@ -185,24 +188,33 @@ public class KnowledgeBaseManager {
         }
 
         Path kbStoragePath = getKnowledgeBaseStoragePath(name);
-        Files.createDirectories(kbStoragePath);
+        
+        try {
+            Files.createDirectories(kbStoragePath);
+        } catch (IOException e) {
+            throw new StorageException(kbStoragePath.toString(), "createKnowledgeBase", e);
+        }
 
-        logger.info("创建知识库: {}, 存储路径: {}", name, kbStoragePath);
+        logger.debug("创建知识库: {}, 存储路径: {}", name, kbStoragePath);
 
-        SemanticTreeManager manager = new SemanticTreeManager(
-            llmProvider,
-            documentComprehender,
-            kbStoragePath,
-            true,
-            concurrencyProperties
-        );
+        try {
+            SemanticTreeManager manager = new SemanticTreeManager(
+                llmProvider,
+                documentComprehender,
+                kbStoragePath,
+                true,
+                concurrencyProperties
+            );
 
-        manager.initialize();
-        managers.put(name, manager);
+            manager.initialize();
+            managers.put(name, manager);
 
-        logger.info("知识库 {} 创建成功", name);
+            logger.info("知识库 {} 创建成功", name);
 
-        return manager;
+            return manager;
+        } catch (IOException e) {
+            throw new StorageException(kbStoragePath.toString(), "createKnowledgeBase", e);
+        }
     }
 
     public void deleteKnowledgeBase(String name) throws IOException {
@@ -217,12 +229,17 @@ public class KnowledgeBaseManager {
         }
 
         SemanticTreeManager manager = managers.remove(name);
-        manager.close();
+        
+        try {
+            manager.close();
+        } catch (IOException e) {
+            throw new StorageException(getKnowledgeBaseStoragePath(name).toString(), "deleteKnowledgeBase", e);
+        }
 
         Path kbStoragePath = getKnowledgeBaseStoragePath(name);
         deleteDirectory(kbStoragePath);
 
-        logger.info("删除知识库: {}, 存储路径: {}", name, kbStoragePath);
+        logger.debug("删除知识库: {}, 存储路径: {}", name, kbStoragePath);
 
         if (currentKnowledgeBase.equals(name)) {
             switchKnowledgeBase(DEFAULT_KNOWLEDGE_BASE);
@@ -272,6 +289,10 @@ public class KnowledgeBaseManager {
         return managers.containsKey(name);
     }
 
+    public LLMProvider getLlmProvider() {
+        return llmProvider;
+    }
+
     private Path getKnowledgeBaseStoragePath(String name) {
         return baseStoragePath.resolve(name);
     }
@@ -300,6 +321,6 @@ public class KnowledgeBaseManager {
             }
         }
         managers.clear();
-        logger.info("知识库管理器已关闭");
+        logger.debug("知识库管理器已关闭");
     }
 }

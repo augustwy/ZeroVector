@@ -4,6 +4,8 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
+import cn.nexon.zerovector.core.exception.NavigationException;
+import cn.nexon.zerovector.core.exception.StorageException;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.DocumentChunk;
@@ -14,6 +16,7 @@ import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import cn.nexon.zerovector.core.storage.ShardedTreeStorage;
 import cn.nexon.zerovector.core.tree.Navigator;
 import cn.nexon.zerovector.core.tree.TreeBuilder;
+import cn.nexon.zerovector.core.util.FileUtils;
 import cn.nexon.zerovector.core.util.MD5Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +25,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -62,66 +64,52 @@ public class SemanticTreeManager {
     }
 
     public void initialize() throws IOException {
-        Path storagePathObj = Paths.get(storagePath.toString());
-        
-        if (!Files.exists(storagePathObj)) {
-            Files.createDirectories(storagePathObj);
-            logger.info("创建存储目录: {}", storagePath);
-        }
-        
-        String documentStoreFilePath = storagePath.toString() + ".data";
-        this.documentStore = MMapDocumentStore.open(documentStoreFilePath);
-        
-        Files.createDirectories(Paths.get(documentsDir));
-        
-        if (useShardedStorage) {
-            this.shardedTreeStorage = new ShardedTreeStorage(treeStorageDir);
-        }
-        
-        if (useShardedStorage) {
-            this.semanticTree = shardedTreeStorage.loadTree();
-        } else {
-            this.semanticTree = SemanticTree.loadFromFile(treeFilePath);
-        }
-        
         try {
-            KeywordDictionary loadedDict = KeywordDictionary.loadFromFile(dictionaryFilePath);
-            this.keywordDictionary = loadedDict;
-            logger.info("已加载已保存的关键词字典");
+            Path storagePathObj = Paths.get(storagePath.toString());
+            
+            if (!Files.exists(storagePathObj)) {
+                Files.createDirectories(storagePathObj);
+                logger.info("创建存储目录: {}", storagePath);
+            }
+            
+            String documentStoreFilePath = storagePath.toString() + ".data";
+            this.documentStore = MMapDocumentStore.open(documentStoreFilePath);
+            
+            Files.createDirectories(Paths.get(documentsDir));
+            
+            if (useShardedStorage) {
+                this.shardedTreeStorage = new ShardedTreeStorage(treeStorageDir);
+            }
+            
+            if (useShardedStorage) {
+                this.semanticTree = shardedTreeStorage.loadTree();
+            } else {
+                this.semanticTree = SemanticTree.loadFromFile(treeFilePath);
+            }
+            
+            try {
+                KeywordDictionary loadedDict = KeywordDictionary.loadFromFile(dictionaryFilePath);
+                this.keywordDictionary = loadedDict;
+                logger.info("已加载已保存的关键词字典");
+            } catch (IOException e) {
+                logger.warn("加载关键词字典失败，将使用新字典: {}", e.getMessage());
+            }
+            
+            if (this.semanticTree != null) {
+                this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
+                this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
+                logger.info("已加载已保存的语义树");
+            }
         } catch (IOException e) {
-            logger.warn("加载关键词字典失败，将使用新字典: {}", e.getMessage());
-        }
-        
-        if (this.semanticTree != null) {
-            this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
-            this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
-            logger.info("已加载已保存的语义树");
+            throw new StorageException(storagePath.toString(), "initialize", e);
         }
     }
 
     public void buildTree(List<Document> documents) {
         logger.info("构建语义树，包含 {} 个文档", documents.size());
         
-        Map<String, DocumentComprehendResult> comprehendResultMap = new HashMap<>();
-        Map<String, DocumentChunk> chunkMap = new HashMap<>();
-        
-        for (Document document : documents) {
-            logger.debug("  - {}: {}", document.id(), document.title());
-            DocumentComprehendResult result = documentComprehender.comprehend(document);
-            comprehendResultMap.put(document.id(), result);
-            
-            DocumentChunk chunk = new DocumentChunk(
-                document.id(),
-                null,
-                result.summary(),
-                document.filePath(),
-                document.md5(),
-                document.metadata()
-            );
-            chunkMap.put(document.id(), chunk);
-        }
-        
-        this.semanticTree = buildTreeInternal(comprehendResultMap, chunkMap);
+        DocumentProcessingResult processingResult = processDocuments(documents);
+        this.semanticTree = buildTreeInternal(processingResult.comprehendResultMap(), processingResult.chunkMap());
         this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
         this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
         
@@ -130,9 +118,41 @@ public class SemanticTreeManager {
         try {
             saveTree();
         } catch (IOException e) {
-            logger.error("保存语义树和关键词字典失败: {}", e.getMessage());
+            throw new StorageException(treeFilePath, "saveTree", e);
         }
     }
+    
+    private DocumentProcessingResult processDocuments(List<Document> documents) {
+        Map<String, DocumentComprehendResult> comprehendResultMap = new HashMap<>();
+        Map<String, DocumentChunk> chunkMap = new HashMap<>();
+        
+        for (Document document : documents) {
+            logger.debug("  - {}: {}", document.id(), document.title());
+            DocumentComprehendResult result = documentComprehender.comprehend(document);
+            comprehendResultMap.put(document.id(), result);
+            
+            DocumentChunk chunk = createDocumentChunk(document, result);
+            chunkMap.put(document.id(), chunk);
+        }
+        
+        return new DocumentProcessingResult(comprehendResultMap, chunkMap);
+    }
+    
+    private DocumentChunk createDocumentChunk(Document document, DocumentComprehendResult result) {
+        return new DocumentChunk(
+            document.id(),
+            null,
+            result.summary(),
+            document.filePath(),
+            document.md5(),
+            document.metadata()
+        );
+    }
+    
+    private record DocumentProcessingResult(
+        Map<String, DocumentComprehendResult> comprehendResultMap,
+        Map<String, DocumentChunk> chunkMap
+    ) {}
     
     private SemanticTree buildTreeInternal(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
         TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
@@ -145,58 +165,66 @@ public class SemanticTreeManager {
     }
 
     public void addDocument(Path filePath) {
-        String md5;
         try {
-            md5 = MD5Util.calculateMD5(filePath);
-        } catch (IOException e) {
-            throw new RuntimeException("计算文件MD5失败", e);
+            String md5 = calculateFileMD5(filePath);
+            
+            if (isDocumentAlreadyExists(md5)) {
+                logger.info("文件 {} 已存在（MD5: {}），跳过处理", filePath, md5);
+                return;
+            }
+            
+            Path copiedFile = createDocumentCopy(filePath);
+            Document document = createDocumentFromFile(filePath, copiedFile, md5);
+            
+            DocumentProcessingResult processingResult = processSingleDocument(document);
+            updateSemanticTreeFromDocuments(processingResult.comprehendResultMap(), processingResult.chunkMap());
+
+            logger.debug("添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
+            
+            try {
+                saveTree();
+            } catch (IOException e) {
+                throw new StorageException(treeFilePath, "saveTree", e);
+            }
+        } catch (StorageException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new StorageException(filePath.toString(), "addDocument", e);
         }
-        
-        boolean alreadyExists = false;
+    }
+    
+    private String calculateFileMD5(Path filePath) throws IOException {
+        return MD5Util.calculateMD5(filePath);
+    }
+    
+    private boolean isDocumentAlreadyExists(String md5) {
         if (semanticTree != null && semanticTree.chunks() != null) {
-            alreadyExists = semanticTree.chunks().values().stream()
+            return semanticTree.chunks().values().stream()
                 .anyMatch(chunk -> chunk.md5() != null && chunk.md5().equals(md5));
         }
-        
-        if (alreadyExists) {
-            logger.info("文件 {} 已存在（MD5: {}），跳过处理", filePath, md5);
-            return;
-        }
-        
-        Path copiedFile = createDocumentCopy(filePath);
-        
-        String fileName = filePath.getFileName().toString();
+        return false;
+    }
+    
+    private Document createDocumentFromFile(Path originalPath, Path copiedPath, String md5) {
+        String fileName = FileUtils.getFileName(originalPath);
         String docId = "doc_" + System.currentTimeMillis();
         
-        Document document = Document.fromFile(docId, fileName, copiedFile.toString(), md5, 
-            Map.of("original_file", filePath.toString()));
-        
+        return Document.fromFile(docId, fileName, copiedPath.toString(), md5, 
+            Map.of("original_file", originalPath.toString()));
+    }
+    
+    private DocumentProcessingResult processSingleDocument(Document document) {
         DocumentComprehendResult result = documentComprehender.comprehend(document);
         
         Map<String, DocumentComprehendResult> comprehendResultMap = new HashMap<>();
-        comprehendResultMap.put(docId, result);
+        comprehendResultMap.put(document.id(), result);
         
-        DocumentChunk chunk = new DocumentChunk(
-            docId,
-            null,
-            result.summary(),
-            copiedFile.toString(),
-            md5,
-            document.metadata()
-        );
+        DocumentChunk chunk = createDocumentChunk(document, result);
         
         Map<String, DocumentChunk> chunkMap = new HashMap<>();
-        chunkMap.put(docId, chunk);
+        chunkMap.put(document.id(), chunk);
         
-        updateSemanticTreeFromDocuments(comprehendResultMap, chunkMap);
-        
-        logger.info("添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
-        
-        try {
-            saveTree();
-        } catch (IOException e) {
-            logger.error("保存语义树和关键词字典失败: {}", e.getMessage());
-        }
+        return new DocumentProcessingResult(comprehendResultMap, chunkMap);
     }
 
     public CompletableFuture<Void> addDocumentAsync(Path filePath) {
@@ -204,6 +232,32 @@ public class SemanticTreeManager {
     }
 
     public void addDocuments(List<Path> filePaths) {
+        try {
+            List<Document> documents = prepareDocuments(filePaths);
+            
+            if (documents.isEmpty()) {
+                logger.info("没有新文档需要处理");
+                return;
+            }
+            
+            DocumentProcessingResult processingResult = processDocuments(documents);
+            updateSemanticTreeFromDocuments(processingResult.comprehendResultMap(), processingResult.chunkMap());
+
+            logger.debug("批量添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
+            
+            try {
+                saveTree();
+            } catch (IOException e) {
+                throw new StorageException(treeFilePath, "saveTree", e);
+            }
+        } catch (StorageException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new StorageException(storagePath.toString(), "addDocuments", e);
+        }
+    }
+    
+    private List<Document> prepareDocuments(List<Path> filePaths) {
         List<Document> documents = new ArrayList<>();
         long baseTimestamp = System.currentTimeMillis();
         int docIndex = 0;
@@ -212,20 +266,14 @@ public class SemanticTreeManager {
             try {
                 String md5 = MD5Util.calculateMD5(filePath);
                 
-                boolean alreadyExists = false;
-                if (semanticTree != null && semanticTree.chunks() != null) {
-                    alreadyExists = semanticTree.chunks().values().stream()
-                        .anyMatch(chunk -> chunk.md5() != null && chunk.md5().equals(md5));
-                }
-                
-                if (alreadyExists) {
-                    logger.info("文件 {} 已存在（MD5: {}），跳过处理", filePath, md5);
+                if (isDocumentAlreadyExists(md5)) {
+                    logger.debug("文件 {} 已存在（MD5: {}），跳过处理", filePath, md5);
                     docIndex++;
                     continue;
                 }
                 
                 Path copiedFile = createDocumentCopy(filePath);
-                String fileName = filePath.getFileName().toString();
+                String fileName = FileUtils.getFileName(filePath);
                 String docId = "doc_" + baseTimestamp + "_" + docIndex;
                 docIndex++;
                 
@@ -238,38 +286,7 @@ public class SemanticTreeManager {
             }
         }
         
-        if (documents.isEmpty()) {
-            logger.info("没有新文档需要处理");
-            return;
-        }
-        
-        Map<String, DocumentComprehendResult> comprehendResultMap = new HashMap<>();
-        Map<String, DocumentChunk> chunkMap = new HashMap<>();
-        
-        for (Document document : documents) {
-            DocumentComprehendResult result = documentComprehender.comprehend(document);
-            comprehendResultMap.put(document.id(), result);
-            
-            DocumentChunk chunk = new DocumentChunk(
-                document.id(),
-                null,
-                result.summary(),
-                document.filePath(),
-                document.md5(),
-                document.metadata()
-            );
-            chunkMap.put(document.id(), chunk);
-        }
-        
-        updateSemanticTreeFromDocuments(comprehendResultMap, chunkMap);
-        
-        logger.info("批量添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
-        
-        try {
-            saveTree();
-        } catch (IOException e) {
-            logger.error("保存语义树和关键词字典失败: {}", e.getMessage());
-        }
+        return documents;
     }
 
     public CompletableFuture<Void> addDocumentsAsync(List<Path> filePaths) {
@@ -278,44 +295,47 @@ public class SemanticTreeManager {
 
     private Path createDocumentCopy(Path originalFile) {
         try {
-            String fileName = originalFile.getFileName().toString();
-            String timestamp = String.valueOf(System.currentTimeMillis());
-            String copiedFileName = timestamp + "_" + fileName;
-            Path copiedFile = Paths.get(documentsDir, copiedFileName);
-            
-            Files.copy(originalFile, copiedFile, StandardCopyOption.REPLACE_EXISTING);
-            logger.info("已创建文档副本: {} -> {}", originalFile, copiedFile);
-            
-            return copiedFile.toAbsolutePath();
+            Path targetDir = Paths.get(documentsDir);
+            FileUtils.createDirectories(targetDir);
+            return FileUtils.copyFileWithTimestamp(originalFile, targetDir);
         } catch (IOException e) {
-            throw new RuntimeException("创建文档副本失败", e);
+            throw new StorageException(originalFile.toString(), "createDocumentCopy", e);
         }
     }
     
     private void updateSemanticTreeFromDocuments(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
-        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
-        
-        if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
-            this.semanticTree = builder.build(comprehendResultMap, chunkMap);
-        } else {
-            this.semanticTree = builder.updateTree(this.semanticTree, new ArrayList<>(comprehendResultMap.values()), chunkMap);
-        }
-        
+        this.semanticTree = buildTreeInternal(comprehendResultMap, chunkMap);
+        updateNavigators();
+    }
+    
+    private void updateNavigators() {
         this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
         this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
     }
     
     public NavigationResult navigate(String query) {
         if (semanticTree == null) {
-            throw new IllegalStateException("Semantic tree not built yet");
+            throw new NavigationException(query, null, NavigationException.ERROR_CODE_TREE_NOT_INITIALIZED, 
+                "Semantic tree not built yet");
         }
         
         if (hybridNavigator != null) {
-            return hybridNavigator.navigate(query);
+            try {
+                return hybridNavigator.navigate(query);
+            } catch (Exception e) {
+                throw new NavigationException(query, semanticTree.rootNode().id(), 
+                    NavigationException.ERROR_CODE_LLM_DECISION_FAILED, "Navigation failed", e);
+            }
         } else if (navigator != null) {
-            return navigator.navigate(query);
+            try {
+                return navigator.navigate(query);
+            } catch (Exception e) {
+                throw new NavigationException(query, semanticTree.rootNode().id(), 
+                    NavigationException.ERROR_CODE_LLM_DECISION_FAILED, "Navigation failed", e);
+            }
         } else {
-            throw new IllegalStateException("No navigator available");
+            throw new NavigationException(query, null, NavigationException.ERROR_CODE_NO_NAVIGATOR, 
+                "No navigator available");
         }
     }
 
@@ -339,9 +359,9 @@ public class SemanticTreeManager {
                 semanticTree.saveToFile(treeFilePath);
             }
         }
-        
+
         keywordDictionary.saveToFile(dictionaryFilePath);
-        logger.info("已保存关键词字典到文件: {}", dictionaryFilePath);
+        logger.debug("已保存关键词字典到文件: {}", dictionaryFilePath);
     }
 
     public void resetNavigator() {
@@ -351,14 +371,26 @@ public class SemanticTreeManager {
     }
 
     public void close() throws IOException {
-        saveTree();
+        try {
+            saveTree();
+        } catch (IOException e) {
+            throw new StorageException(storagePath.toString(), "close", e);
+        }
         
         if (documentStore != null) {
-            documentStore.close();
+            try {
+                documentStore.close();
+            } catch (IOException e) {
+                throw new StorageException(storagePath.toString(), "close", e);
+            }
         }
         
         if (shardedTreeStorage != null) {
-            shardedTreeStorage.close();
+            try {
+                shardedTreeStorage.close();
+            } catch (IOException e) {
+                throw new StorageException(storagePath.toString(), "close", e);
+            }
         }
     }
 }

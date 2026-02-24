@@ -1,9 +1,13 @@
 package cn.nexon.zerovector.core.navigator;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
+import cn.nexon.zerovector.core.exception.NavigationException;
+import cn.nexon.zerovector.core.exception.PromptLoadException;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
+import cn.nexon.zerovector.core.util.PerformanceMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,10 +18,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-/**
- * 混合导航器
- * 目标：结合关键词跳转与 LLM 语义推理，实现精准导航
- */
 public class HybridNavigator {
     private static final Logger logger = LoggerFactory.getLogger(HybridNavigator.class);
     
@@ -33,44 +33,55 @@ public class HybridNavigator {
         this.store = store;
     }
     
-    /**
-     * 执行导航
-     */
     public NavigationResult navigate(String query) {
-        Map<String, Double> candidates = dictionary.matchCandidates(query);
-        String fastTrackNodeId = null;
+        PerformanceMonitor navigateMonitor = new PerformanceMonitor("HybridNavigator.navigate");
+        navigateMonitor.start();
         
-        if (!candidates.isEmpty()) {
-            fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
-        }
-        
-        TreeNode currentNode;
-        if (fastTrackNodeId != null) {
-            currentNode = tree.getNode(fastTrackNodeId);
-            if (currentNode == null) {
-                logger.warn("快速通道节点 {} 不存在，回退到根节点", fastTrackNodeId);
+        try {
+            Map<String, Double> candidates = dictionary.matchCandidates(query);
+            String fastTrackNodeId = null;
+            
+            if (!candidates.isEmpty()) {
+                fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
+            }
+            
+            TreeNode currentNode;
+            if (fastTrackNodeId != null) {
+                currentNode = tree.getNode(fastTrackNodeId);
+                if (currentNode == null) {
+                    logger.warn("快速通道节点 {} 不存在，回退到根节点", fastTrackNodeId);
+                    currentNode = tree.rootNode();
+                }
+            } else {
                 currentNode = tree.rootNode();
             }
-        } else {
-            currentNode = tree.rootNode();
-        }
-        
-        if (currentNode == null) {
-            throw new IllegalStateException("无法获取起始节点进行导航");
-        }
             
-        return navigateInternal(query, currentNode, new ArrayList<>());
+            if (currentNode == null) {
+                throw new NavigationException(query, null, NavigationException.ERROR_CODE_TREE_NOT_INITIALIZED, 
+                    "无法获取起始节点进行导航");
+            }
+                
+            return navigateInternal(query, currentNode, new ArrayList<>());
+        } catch (NavigationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new NavigationException(query, tree != null ? tree.rootNode().id() : null, 
+                NavigationException.ERROR_CODE_LLM_DECISION_FAILED, "Navigation failed", e);
+        } finally {
+            navigateMonitor.stop();
+            logger.info("导航查询总耗时: {}ms, 查询: {}", navigateMonitor.getDurationMillis(), query);
+        }
     }
     
-    /**
-     * 内部导航逻辑
-     */
     private NavigationResult navigateInternal(String query, TreeNode startNode, List<NavigationPath> navigationHistory) {
         List<TreeNode> path = new ArrayList<>();
         path.add(startNode);
         TreeNode current = startNode;
+        int stepCount = 0;
         
-        // 记录导航开始
+        PerformanceMonitor internalMonitor = new PerformanceMonitor("HybridNavigator.navigateInternal");
+        internalMonitor.start();
+        
         NavigationPath currentPath = new NavigationPath(
             query,
             List.of(startNode.id()),
@@ -83,18 +94,25 @@ public class HybridNavigator {
                 break;
             }
             
-            // 构建带"提示"的 Prompt
+            stepCount++;
+            PerformanceMonitor stepMonitor = new PerformanceMonitor("HybridNavigator.navigateStep");
+            stepMonitor.start();
+            
             String prompt = buildNavigationPrompt(query, current);
             
-            // 调用 LLM
+            PerformanceMonitor llmMonitor = new PerformanceMonitor("HybridNavigator.llmDecideNavigation");
+            llmMonitor.start();
             String response = llm.decideNavigation(prompt);
+            llmMonitor.stop();
+            
             NavigationAction action = parseNavigationResponse(response, getCurrentChildNodes(current));
             
-            // [KEY] 模式匹配处理决策
             switch (action) {
                 case NavigationAction.SelectChild(String nodeId, String reasoning, double conf) -> {
-                    // 如果置信度过低，触发 Fallback
                     if (conf < 0.3) {
+                        stepMonitor.stop();
+                        logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 触发回退", 
+                                stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                         return handleFallback(query, navigationHistory);
                     }
                     TreeNode nextNode = tree.getNode(nodeId);
@@ -102,7 +120,6 @@ public class HybridNavigator {
                         current = nextNode;
                         path.add(current);
                         
-                        // 记录导航路径
                         List<String> previousNodes = navigationHistory.get(navigationHistory.size() - 1).visitedNodes();
                         List<String> newVisitedNodes = new ArrayList<>(previousNodes);
                         newVisitedNodes.add(nodeId);
@@ -114,13 +131,21 @@ public class HybridNavigator {
                     }
                 }
                 case NavigationAction.ExpandMultiple(List<String> nodeIds, String reasoning) -> {
-                    // [Phase 1 功能] 多分支并行处理
+                    stepMonitor.stop();
+                    logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 多分支扩展", 
+                            stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                     return handleMultiPath(query, nodeIds, navigationHistory);
                 }
                 case NavigationAction.FallbackSearch(String reason) -> {
+                    stepMonitor.stop();
+                    logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 触发回退搜索", 
+                            stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                     return handleFallback(query, navigationHistory);
                 }
                 case NavigationAction.Stop(String reasoning) -> {
+                    stepMonitor.stop();
+                    logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 停止导航", 
+                            stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                     return new NavigationResult(
                         List.of(),
                         reasoning,
@@ -128,12 +153,17 @@ public class HybridNavigator {
                     );
                 }
                 default -> {
-                    // 处理其他情况
                 }
             }
+            
+            stepMonitor.stop();
+            logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms", 
+                    stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
         }
         
-        // [Phase 3] 到达叶子节点，读取文档
+        internalMonitor.stop();
+        logger.debug("导航内部逻辑总耗时: {}ms, 步骤数: {}", internalMonitor.getDurationMillis(), stepCount);
+        
         List<DocumentChunk> chunks = loadChunks(current.chunkIds());
         return new NavigationResult(
             chunks,
@@ -142,37 +172,27 @@ public class HybridNavigator {
         );
     }
     
-    /**
-     * 获取当前节点的子节点列表
-     */
     private List<TreeNode> getCurrentChildNodes(TreeNode current) {
         return current.childrenIds().stream()
             .map(tree::getNode)
             .collect(Collectors.toList());
     }
     
-    /**
-     * [CRITICAL] 构建 Prompt 时注入关键词信息
-     */
     private String buildNavigationPrompt(String query, TreeNode node) {
-        // 获取当前节点的关键词，显式告诉 LLM
-        String keywordHints = String.join(", ", node.keywords());
-        String entityHints = String.join(", ", node.keyEntities());
+        List<String> childNodeDescriptions = node.childrenIds().stream()
+            .map(tree::getNode)
+            .filter(java.util.Objects::nonNull)
+            .map(n -> n.name() + " - " + n.description())
+            .toList();
         
-        return String.format("""
-            用户问题: %s
-            当前节点: %s
-            节点描述: %s
-            该节点核心实体: %s
-            该节点关键词: %s
-            
-            请判断应该进入哪个子节点？
-            """, query, node.name(), node.description(), entityHints, keywordHints);
+        return LLMPromptTemplates.decideNavigation(
+            query,
+            node.name(),
+            node.description(),
+            childNodeDescriptions
+        );
     }
     
-    /**
-     * 处理多路径情况
-     */
     private NavigationResult handleMultiPath(String query, List<String> nodeIds, List<NavigationPath> navigationHistory) {
         List<DocumentChunk> allChunks = new ArrayList<>();
         List<String> allNodeIds = new ArrayList<>();
@@ -187,7 +207,6 @@ public class HybridNavigator {
             }
         }
         
-        // 记录多路径导航
         navigationHistory.add(new NavigationPath(
             query,
             allNodeIds,
@@ -201,11 +220,7 @@ public class HybridNavigator {
         );
     }
     
-    /**
-     * 处理回退搜索
-     */
     private NavigationResult handleFallback(String query, List<NavigationPath> navigationHistory) {
-        // 使用关键词词典进行全文搜索
         Map<String, Double> candidates = dictionary.matchCandidates(query);
         
         if (candidates.isEmpty()) {
@@ -221,7 +236,6 @@ public class HybridNavigator {
             );
         }
         
-        // 获取最相关的节点
         String topNodeId = candidates.entrySet().stream()
             .max(Map.Entry.comparingByValue())
             .map(Map.Entry::getKey)
@@ -255,16 +269,11 @@ public class HybridNavigator {
         );
     }
     
-    /**
-     * 加载文档块
-     */
     private List<DocumentChunk> loadChunks(List<String> chunkIds) {
         return chunkIds.stream()
             .map(chunkId -> {
-                // 首先从语义树中获取DocumentChunk对象
                 DocumentChunk chunk = tree.getChunk(chunkId);
                 if (chunk == null) {
-                    // 如果语义树中没有，尝试从存储中获取内容并创建DocumentChunk
                     String content = store.getChunk(chunkId);
                     if (content != null) {
                         return DocumentChunk.withContent(chunkId, content, null, Map.of());
@@ -272,26 +281,22 @@ public class HybridNavigator {
                     return null;
                 }
                 
-                // 如果是基于文件路径的文档块，使用MMapDocumentStore读取文件内容
                 if (chunk.isFilePathBased()) {
                     try {
                         String content = store.getChunkContent(chunk);
-                        // 创建一个新的DocumentChunk，包含从文件读取的内容
                         return new DocumentChunk(
                             chunk.id(),
-                            content,  // 从文件读取的实际内容
+                            content,
                             chunk.summary(),
                             chunk.filePath(),
                             chunk.md5(),
                             chunk.metadata()
                         );
                     } catch (Exception e) {
-                        // 如果读取失败，返回原始块
                         return chunk;
                     }
                 }
                 
-                // 如果是基于内容的文档块，但内容为空，尝试从存储中加载
                 if (chunk.content() == null || chunk.content().isEmpty()) {
                     String content = store.getChunk(chunkId);
                     if (content != null) {
@@ -328,17 +333,8 @@ public class HybridNavigator {
                 return new NavigationAction.Stop(result.reasoning());
             }
         } catch (Exception e) {
-            logger.error("解析导航决策失败: {}", e.getMessage());
-            if (childNodes.isEmpty()) {
-                return new NavigationAction.Stop("没有可用的子节点");
-            } else {
-                TreeNode selectedNode = childNodes.get(0);
-                return new NavigationAction.SelectChild(
-                        selectedNode.id(),
-                        "默认选择第一个子节点",
-                        0.5
-                );
-            }
+            throw new PromptLoadException("decideNavigation", PromptLoadException.ERROR_CODE_PARSE_FAILED, 
+                "Failed to parse navigation decision response", e);
         }
     }
     
