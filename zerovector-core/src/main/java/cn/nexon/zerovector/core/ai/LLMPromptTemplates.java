@@ -33,7 +33,7 @@ public final class LLMPromptTemplates {
                   "clusters": [
                     {
                       "name": "类别名称",
-                      "chunks": [0, 1, 2]
+                      "chunkIndices": [0, 1, 2]
                     }
                   ]
                 }

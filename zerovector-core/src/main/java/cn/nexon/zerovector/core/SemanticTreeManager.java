@@ -52,11 +52,11 @@ public class SemanticTreeManager {
         this.llmProvider = llmProvider;
         this.documentComprehender = documentComprehender;
         this.keywordDictionary = new KeywordDictionary();
-        this.storagePath = storagePath;
-        this.treeFilePath = storagePath.toString() + ".tree";
-        this.treeStorageDir = storagePath.toString() + "_shards";
-        this.dictionaryFilePath = storagePath.toString() + ".dict";
-        this.documentsDir = storagePath.toString() + "_docs";
+        this.storagePath = Paths.get(storagePath.toString(), "zerovector_storage");
+        this.treeFilePath = this.storagePath.toString() + ".tree";
+        this.treeStorageDir = this.storagePath.toString() + "_shards";
+        this.dictionaryFilePath = this.storagePath.toString() + ".dict";
+        this.documentsDir = this.storagePath.toString() + "_docs";
         this.useShardedStorage = useShardedStorage;
         this.concurrencyProperties = concurrencyProperties;
     }
@@ -65,11 +65,12 @@ public class SemanticTreeManager {
         Path storagePathObj = Paths.get(storagePath.toString());
         
         if (!Files.exists(storagePathObj)) {
-            Files.createDirectories(storagePathObj.getParent());
+            Files.createDirectories(storagePathObj);
             logger.info("创建存储目录: {}", storagePath);
         }
         
-        this.documentStore = MMapDocumentStore.open(storagePath.toString());
+        String documentStoreFilePath = storagePath.toString() + ".data";
+        this.documentStore = MMapDocumentStore.open(documentStoreFilePath);
         
         Files.createDirectories(Paths.get(documentsDir));
         

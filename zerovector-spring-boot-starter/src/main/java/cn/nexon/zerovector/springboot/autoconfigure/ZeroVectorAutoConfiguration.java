@@ -1,11 +1,11 @@
 package cn.nexon.zerovector.springboot.autoconfigure;
 
+import cn.nexon.zerovector.core.KnowledgeBaseManager;
 import cn.nexon.zerovector.core.ai.LLMProvider;
-import cn.nexon.zerovector.core.SemanticTreeManager;
+import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMProvider;
+import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMProvider;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
 import cn.nexon.zerovector.springboot.service.SemanticFacade;
-import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMProvider;
-import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMProvider;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,19 +35,19 @@ public class ZeroVectorAutoConfiguration {
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(ChatModel.class)
     static class SpringAiConfiguration {
-
+        
         @Bean
         @ConditionalOnMissingBean(LLMProvider.class)
         public LLMProvider springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
             return new SpringAiLLMProvider(chatModel, config.getModel());
         }
     }
-
+    
     // 检测到 Langchain4j 类路径
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(ChatLanguageModel.class)
     static class Langchain4jConfiguration {
-
+        
         @Bean
         @ConditionalOnMissingBean(LLMProvider.class)
         public LLMProvider langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
@@ -67,23 +67,29 @@ public class ZeroVectorAutoConfiguration {
     }
 
     /**
-     * 创建语义树管理器
+     * 创建知识库管理器
      */
     @Bean
     @ConditionalOnMissingBean
-    public SemanticTreeManager semanticTreeService(LLMProvider llmProvider, DocumentComprehender documentComprehender, ZeroVectorProperties properties) {
-        logger.info("创建语义树管理器，存储路径: {}, 分片存储: {}",
-                properties.getStoragePath(), properties.isUseShardedStorage());
-
-        Path storagePath = Paths.get(properties.getStoragePath());
-        SemanticTreeManager service = new SemanticTreeManager(llmProvider, documentComprehender, storagePath, properties.isUseShardedStorage(), properties.getConcurrency());
+    @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public KnowledgeBaseManager knowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender, 
+                                                      ZeroVectorProperties properties) {
+        logger.info("创建知识库管理器，基础存储路径: {}", properties.getStorageBasePath());
+        
+        KnowledgeBaseManager manager = new KnowledgeBaseManager(
+            llmProvider, 
+            documentComprehender, 
+            properties.getConcurrency(), 
+            properties.getStorageBasePath()
+        );
+        
         try {
-            service.initialize();
-            logger.info("语义树管理器初始化完成");
-            return service;
+            manager.initialize();
+            logger.info("知识库管理器初始化完成");
+            return manager;
         } catch (Exception e) {
-            logger.error("语义树管理器初始化失败", e);
-            throw new RuntimeException("语义树管理器初始化失败", e);
+            logger.error("知识库管理器初始化失败", e);
+            throw new RuntimeException("知识库管理器初始化失败", e);
         }
     }
 
@@ -92,7 +98,8 @@ public class ZeroVectorAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public SemanticFacade zeroVectorService(SemanticTreeManager semanticTreeManager) {
-        return new SemanticFacade(semanticTreeManager);
+    @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public SemanticFacade semanticFacade(KnowledgeBaseManager knowledgeBaseManager) {
+        return new SemanticFacade(knowledgeBaseManager);
     }
 }

@@ -9,6 +9,7 @@ import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -425,7 +426,7 @@ public class TreeBuilder {
     
     private List<NodeCategory> parseClusterResponse(String response, Map<String, DocumentComprehendResult> documents) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            ObjectMapper objectMapper = new ObjectMapper();
             ClusterResponse result = objectMapper.readValue(response, ClusterResponse.class);
             
             List<NodeCategory> categories = new ArrayList<>();

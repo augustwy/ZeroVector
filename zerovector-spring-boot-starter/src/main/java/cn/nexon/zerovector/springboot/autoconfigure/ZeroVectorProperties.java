@@ -2,8 +2,6 @@ package cn.nexon.zerovector.springboot.autoconfigure;
 
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.Max;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -19,7 +17,15 @@ public class ZeroVectorProperties {
     private boolean enabled = true;
     
     @NotBlank
-    private String storagePath = "./data/zerovector_storage";
+    private String storageBasePath = "./data/knowledge_bases";
+    
+    public String getStorageBasePath() {
+        return storageBasePath;
+    }
+    
+    public void setStorageBasePath(String storageBasePath) {
+        this.storageBasePath = storageBasePath;
+    }
     
     private boolean useShardedStorage = true;
     
@@ -43,14 +49,6 @@ public class ZeroVectorProperties {
     
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
-    }
-    
-    public String getStoragePath() {
-        return storagePath;
-    }
-    
-    public void setStoragePath(String storagePath) {
-        this.storagePath = storagePath;
     }
     
     public boolean isUseShardedStorage() {

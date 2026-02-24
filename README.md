@@ -106,6 +106,53 @@ NavigationResult result = manager.navigate("什么是单例模式？");
 manager.close();
 ```
 
+### 知识库管理
+
+ZeroVector 支持动态创建和管理多个独立的知识库，每个知识库有独立的存储空间。
+
+```java
+@Autowired
+private SemanticFacade semanticFacade;
+
+// 创建新知识库
+String kbName = semanticFacade.createKnowledgeBase("tech-docs");
+
+// 添加文档到指定知识库
+semanticFacade.addDocument(Paths.get("document.md"), "tech-docs");
+
+// 查询指定知识库
+SearchResult result = semanticFacade.search("什么是单例模式？", "tech-docs");
+
+// 切换知识库
+semanticFacade.switchKnowledgeBase("product-docs");
+
+// 列出所有知识库
+List<String> names = semanticFacade.listKnowledgeBases();
+
+// 删除知识库
+semanticFacade.deleteKnowledgeBase("old-docs");
+
+// 获取当前知识库名称
+String currentKb = semanticFacade.getCurrentKnowledgeBase();
+```
+
+### Spring Boot 配置
+
+```yaml
+zerovector:
+  enabled: true
+  storage-base-path: ./data/knowledge_bases  # 知识库基础存储路径
+  
+  llm-context:
+    max-chunk-tokens: 4000
+    chunk-overlap-tokens: 200
+    min-chunk-tokens: 500
+  
+  concurrency:
+    max-concurrent-requests: 5
+    requests-per-second: 2.0
+```
+
 ### Spring Boot 集成
 
 ```java
