@@ -1,6 +1,7 @@
 package cn.nexon.zerovector.core.tree;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
@@ -263,12 +264,12 @@ public class TreeBuilder {
         PerformanceMonitor clusterMonitor = new PerformanceMonitor("TreeBuilder.clusterDocuments");
         clusterMonitor.start();
         String clusterPrompt = LLMPromptTemplates.clusterDocumentChunks(summaries);
-        String response = llm.clusterDocuments(clusterPrompt);
+        LLMResponse response = llm.clusterDocuments(clusterPrompt);
         clusterMonitor.stop();
         
         logger.debug("聚类操作耗时: {}ms", clusterMonitor.getDurationMillis());
         
-        return parseClusterResponse(response, documents);
+        return parseClusterResponse(response.content(), documents);
     }
 
     private boolean shouldCreateSingleLeafNode(List<NodeCategory> categories, Map<String, DocumentComprehendResult> documents) {
@@ -349,9 +350,13 @@ public class TreeBuilder {
         String entitiesPrompt = LLMPromptTemplates.extractEntities(summariesText);
         String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
         
-        List<String> keywords = parseListResponse(llm.extractKeywords(keywordsPrompt));
-        List<String> entities = parseListResponse(llm.extractEntities(entitiesPrompt));
-        List<String> examples = parseListResponse(llm.generateExampleQuestions(examplesPrompt));
+        LLMResponse keywordsResponse = llm.extractKeywords(keywordsPrompt);
+        LLMResponse entitiesResponse = llm.extractEntities(entitiesPrompt);
+        LLMResponse examplesResponse = llm.generateExampleQuestions(examplesPrompt);
+        
+        List<String> keywords = parseListResponse(keywordsResponse.content());
+        List<String> entities = parseListResponse(entitiesResponse.content());
+        List<String> examples = parseListResponse(examplesResponse.content());
         
         keywordsMonitor.stop();
         

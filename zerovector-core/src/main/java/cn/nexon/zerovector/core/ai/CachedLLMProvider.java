@@ -16,7 +16,7 @@ public class CachedLLMProvider implements LLMProvider {
     private static final Logger logger = LoggerFactory.getLogger(CachedLLMProvider.class);
     
     private final LLMProvider delegate;
-    private final Map<SmartCacheStrategy.RequestType, Cache<String, String>> caches;
+    private final Map<SmartCacheStrategy.RequestType, Cache<String, LLMResponse>> caches;
     private final Map<SmartCacheStrategy.RequestType, CacheStatistics> statistics;
     private final Map<SmartCacheStrategy.RequestType, CacheConfig> configs;
     private final Map<String, String> similarPromptCache;
@@ -39,7 +39,7 @@ public class CachedLLMProvider implements LLMProvider {
         for (SmartCacheStrategy.RequestType type : SmartCacheStrategy.RequestType.values()) {
             CacheConfig config = configs.getOrDefault(type, SmartCacheStrategy.getConfigForType(type));
             if (config.enabled()) {
-                Cache<String, String> cache = Caffeine.newBuilder()
+                Cache<String, LLMResponse> cache = Caffeine.newBuilder()
                     .maximumSize(config.maxSize())
                     .expireAfterAccess(config.expireAfterAccess(), config.timeUnit())
                     .recordStats()
@@ -63,8 +63,8 @@ public class CachedLLMProvider implements LLMProvider {
         return configs;
     }
     
-    private String getCachedResult(SmartCacheStrategy.RequestType type, String prompt, Function<String, String> loader) {
-        Cache<String, String> cache = caches.get(type);
+    private LLMResponse getCachedResult(SmartCacheStrategy.RequestType type, String prompt, Function<String, LLMResponse> loader) {
+        Cache<String, LLMResponse> cache = caches.get(type);
         if (cache == null) {
             return loader.apply(prompt);
         }
@@ -72,7 +72,7 @@ public class CachedLLMProvider implements LLMProvider {
         String cacheKey = SmartCacheStrategy.generateCacheKey(type, prompt);
         CacheStatistics stats = statistics.get(type);
         
-        String cached = cache.getIfPresent(cacheKey);
+        LLMResponse cached = cache.getIfPresent(cacheKey);
         if (cached != null) {
             if (stats != null) stats.recordHit();
             logger.debug("Cache hit for type: {}, key: {}", type, cacheKey);
@@ -81,7 +81,7 @@ public class CachedLLMProvider implements LLMProvider {
         
         if (stats != null) stats.recordMiss();
         
-        String similarResult = findSimilarCachedResult(type, prompt);
+        LLMResponse similarResult = findSimilarCachedResult(type, prompt);
         if (similarResult != null) {
             cache.put(cacheKey, similarResult);
             if (stats != null) stats.recordHit();
@@ -91,7 +91,7 @@ public class CachedLLMProvider implements LLMProvider {
         
         long startTime = System.nanoTime();
         try {
-            String result = loader.apply(prompt);
+            LLMResponse result = loader.apply(prompt);
             long loadTime = System.nanoTime() - startTime;
             
             cache.put(cacheKey, result);
@@ -110,11 +110,11 @@ public class CachedLLMProvider implements LLMProvider {
         }
     }
     
-    private String findSimilarCachedResult(SmartCacheStrategy.RequestType type, String prompt) {
-        Cache<String, String> cache = caches.get(type);
+    private LLMResponse findSimilarCachedResult(SmartCacheStrategy.RequestType type, String prompt) {
+        Cache<String, LLMResponse> cache = caches.get(type);
         if (cache == null) return null;
         
-        for (Map.Entry<String, String> entry : cache.asMap().entrySet()) {
+        for (Map.Entry<String, LLMResponse> entry : cache.asMap().entrySet()) {
             String cachedPrompt = similarPromptCache.get(entry.getKey());
             if (cachedPrompt != null && SmartCacheStrategy.isSimilarPrompt(prompt, cachedPrompt)) {
                 return entry.getValue();
@@ -124,49 +124,49 @@ public class CachedLLMProvider implements LLMProvider {
     }
     
     @Override
-    public String comprehendChunk(String prompt) {
+    public LLMResponse comprehendChunk(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, prompt, 
             p -> delegate.comprehendChunk(p));
     }
     
     @Override
-    public String generateSummary(String prompt) {
+    public LLMResponse generateSummary(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, prompt, 
             p -> delegate.generateSummary(p));
     }
     
     @Override
-    public String clusterDocuments(String prompt) {
+    public LLMResponse clusterDocuments(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, prompt, 
             p -> delegate.clusterDocuments(p));
     }
     
     @Override
-    public String extractKeywords(String prompt) {
+    public LLMResponse extractKeywords(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, prompt, 
             p -> delegate.extractKeywords(p));
     }
     
     @Override
-    public String extractEntities(String prompt) {
+    public LLMResponse extractEntities(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, prompt, 
             p -> delegate.extractEntities(p));
     }
     
     @Override
-    public String generateExampleQuestions(String prompt) {
+    public LLMResponse generateExampleQuestions(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, prompt, 
             p -> delegate.generateExampleQuestions(p));
     }
     
     @Override
-    public String decideNavigation(String prompt) {
+    public LLMResponse decideNavigation(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, prompt, 
             p -> delegate.decideNavigation(p));
     }
 
     @Override
-    public String extractQueryKeywords(String prompt) {
+    public LLMResponse extractQueryKeywords(String prompt) {
         return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, prompt, 
             p -> delegate.extractQueryKeywords(p));
     }
@@ -179,7 +179,7 @@ public class CachedLLMProvider implements LLMProvider {
     }
     
     public void clearCache(SmartCacheStrategy.RequestType type) {
-        Cache<String, String> cache = caches.get(type);
+        Cache<String, LLMResponse> cache = caches.get(type);
         if (cache != null) {
             cache.invalidateAll();
         }
@@ -205,7 +205,7 @@ public class CachedLLMProvider implements LLMProvider {
             if (prompts == null || prompts.isEmpty()) return;
             
             logger.info("Warming up cache for type: {} with {} prompts", type, prompts.size());
-            Cache<String, String> cache = caches.get(type);
+            Cache<String, LLMResponse> cache = caches.get(type);
             if (cache == null) return;
             
             int successCount = 0;
@@ -215,7 +215,7 @@ public class CachedLLMProvider implements LLMProvider {
                 try {
                     String cacheKey = SmartCacheStrategy.generateCacheKey(type, prompt);
                     if (!cache.asMap().containsKey(cacheKey)) {
-                        String result = switch (type) {
+                        LLMResponse result = switch (type) {
                             case COMPREHEND_CHUNK -> delegate.comprehendChunk(prompt);
                             case GENERATE_SUMMARY -> delegate.generateSummary(prompt);
                             case CLUSTER_DOCUMENTS -> delegate.clusterDocuments(prompt);
@@ -244,7 +244,7 @@ public class CachedLLMProvider implements LLMProvider {
     public void updateCacheConfig(SmartCacheStrategy.RequestType type, CacheConfig config) {
         configs.put(type, config);
         if (config.enabled()) {
-            Cache<String, String> newCache = Caffeine.newBuilder()
+            Cache<String, LLMResponse> newCache = Caffeine.newBuilder()
                 .maximumSize(config.maxSize())
                 .expireAfterAccess(config.expireAfterAccess(), config.timeUnit())
                 .recordStats()
@@ -270,7 +270,7 @@ public class CachedLLMProvider implements LLMProvider {
     }
     
     public long getCacheSize(SmartCacheStrategy.RequestType type) {
-        Cache<String, String> cache = caches.get(type);
+        Cache<String, LLMResponse> cache = caches.get(type);
         return cache == null ? 0 : cache.estimatedSize();
     }
     

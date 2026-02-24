@@ -123,11 +123,13 @@ public final class LLMPromptTemplates {
 
     public static String extractQueryKeywords(String query) {
         return """
-            请从以下用户查询中提取3-5个最重要的关键词：
+            请从以下用户查询中提取3-5个最重要的关键词:
 
             %s
 
-            请只列出关键词，每行一个，不要包含其他内容。
+            注意:
+            1. 关键词必须是用户查询中直接出现的术语，而不是从其他内容中提取的。
+            2. 请只列出关键词，每行一个，不要包含其他内容。
             """.formatted(query);
     }
 }

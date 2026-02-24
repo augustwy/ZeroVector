@@ -1,6 +1,7 @@
 package cn.nexon.zerovector.core.document.comprehend;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.exception.DocumentProcessingException;
 import cn.nexon.zerovector.core.exception.PromptLoadException;
@@ -183,10 +184,10 @@ public class DocumentComprehender {
 
         PerformanceMonitor llmMonitor = new PerformanceMonitor("DocumentComprehender.llmComprehendChunk");
         llmMonitor.start();
-        String response = llmProvider.comprehendChunk(fullPrompt);
+        LLMResponse response = llmProvider.comprehendChunk(fullPrompt);
         llmMonitor.stop();
         
-        DocumentComprehendResult chunkResult = parseComprehendResponse(response);
+        DocumentComprehendResult chunkResult = parseComprehendResponse(response.content());
         
         return new ChunkComprehendResult(
             chunkResult.summary(),
@@ -206,10 +207,10 @@ public class DocumentComprehender {
         PerformanceMonitor summaryMonitor = new PerformanceMonitor("DocumentComprehender.llmGenerateSummary");
         summaryMonitor.start();
         String summaryPrompt = LLMPromptTemplates.generateSummary(title, accumulatedSummary);
-        String finalSummary = llmProvider.generateSummary(summaryPrompt);
+        LLMResponse response = llmProvider.generateSummary(summaryPrompt);
         summaryMonitor.stop();
         
-        return finalSummary;
+        return response.content();
     }
 
     private DocumentComprehendResult comprehendContentBased(Document document) {

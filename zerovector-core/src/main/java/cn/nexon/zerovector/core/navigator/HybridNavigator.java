@@ -1,6 +1,7 @@
 package cn.nexon.zerovector.core.navigator;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.exception.NavigationException;
 import cn.nexon.zerovector.core.exception.PromptLoadException;
@@ -42,9 +43,9 @@ public class HybridNavigator {
             
             try {
                 String keywordsPrompt = LLMPromptTemplates.extractQueryKeywords(query);
-                String keywordsResponse = llm.extractQueryKeywords(keywordsPrompt);
+                LLMResponse keywordsResponse = llm.extractQueryKeywords(keywordsPrompt);
                 
-                List<String> extractedKeywords = parseKeywordsResponse(keywordsResponse);
+                List<String> extractedKeywords = parseKeywordsResponse(keywordsResponse.content());
                 logger.debug("从查询中提取的关键词: {}", extractedKeywords);
                 
                 if (!extractedKeywords.isEmpty()) {
@@ -118,10 +119,10 @@ public class HybridNavigator {
             
             PerformanceMonitor llmMonitor = new PerformanceMonitor("HybridNavigator.llmDecideNavigation");
             llmMonitor.start();
-            String response = llm.decideNavigation(prompt);
+            LLMResponse response = llm.decideNavigation(prompt);
             llmMonitor.stop();
             
-            NavigationAction action = parseNavigationResponse(response, getCurrentChildNodes(current));
+            NavigationAction action = parseNavigationResponse(response.content(), getCurrentChildNodes(current));
             
             switch (action) {
                 case NavigationAction.SelectChild(String nodeId, String reasoning, double conf) -> {

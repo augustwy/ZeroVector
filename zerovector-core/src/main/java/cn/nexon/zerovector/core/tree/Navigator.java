@@ -1,6 +1,7 @@
 package cn.nexon.zerovector.core.tree;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
@@ -94,8 +95,8 @@ public class Navigator {
             childNodeDescriptions
         );
         
-        String response = llmService.decideNavigation(navigationPrompt);
-        NavigationAction action = parseNavigationResponse(response, childNodes);
+        LLMResponse response = llmService.decideNavigation(navigationPrompt);
+        NavigationAction action = parseNavigationResponse(response.content(), childNodes);
         
         return switch (action) {
             case NavigationAction.SelectChild(String nodeId, String reasoning, double confidence) -> {
