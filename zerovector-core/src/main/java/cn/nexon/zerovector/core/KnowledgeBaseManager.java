@@ -255,7 +255,7 @@ public class KnowledgeBaseManager {
         
         try {
             manager.close();
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new StorageException(getKnowledgeBaseStoragePath(name).toString(), "deleteKnowledgeBase", e);
         }
 
@@ -339,7 +339,7 @@ public class KnowledgeBaseManager {
         for (Map.Entry<String, SemanticTreeManager> entry : managers.entrySet()) {
             try {
                 entry.getValue().close();
-            } catch (IOException e) {
+            } catch (Exception e) {
                 logger.error("关闭知识库 {} 失败", entry.getKey(), e);
             }
         }

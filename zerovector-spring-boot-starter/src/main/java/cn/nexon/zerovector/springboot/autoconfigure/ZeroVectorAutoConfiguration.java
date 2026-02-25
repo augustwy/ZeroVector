@@ -189,6 +189,8 @@ public class ZeroVectorAutoConfiguration {
 
     /**
      * 创建知识库管理器
+     * 
+     * <p>知识库管理器统一管理存储，存储路径为 {storageBasePath}/{knowledgeBaseName}/
      */
     @Bean
     @ConditionalOnMissingBean
@@ -199,8 +201,8 @@ public class ZeroVectorAutoConfiguration {
         
         KnowledgeBaseManager manager = new KnowledgeBaseManager(
             llmProvider, 
-            documentComprehender, 
-            properties.getConcurrency(), 
+            documentComprehender,
+            properties.getConcurrency(),
             properties.getStorageBasePath(),
             hookExecutor
         );

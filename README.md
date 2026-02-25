@@ -1,12 +1,3 @@
-~~~
-                                    _             
-                                   | |            
- _______ _ __ ___   __   _____  ___| |_ ___  _ __ 
-|_  / _ \ '__/ _ \  \ \ / / _ \/ __| __/ _ \| '__|
- / /  __/ | | (_) |  \ V /  __/ (__| || (_) | |   
-/___\___|_|  \___/    \_/ \___|\___|\__\___/|_| 
-~~~
-
 # ZeroVector
 
 **Zero-Copy, Zero-Distortion, Zero-Embedding Knowledge Base.**
@@ -23,6 +14,7 @@ ZeroVector 是一款基于 Java 25 构建的新一代知识库系统。我们拒
 - 📉 **Cost Efficient** - 无需 GPU 进行向量训练，无需维护向量数据库
 - 🔍 **Hybrid Navigation** - 结合关键词倒排索引与 LLM 语义推理
 - 📦 **Sharded Storage** - 支持分片存储，按需加载，支持百万级文档
+- 🔌 **SPI 扩展** - 存储层支持 SPI 扩展，可接入 Elasticsearch、MinIO 等
 
 ## 技术方案
 
@@ -44,18 +36,21 @@ ZeroVector 采用语义树结构组织文档，每个节点代表一个语义单
 
 ```
 ZeroVector/
-├── data/                          # 数据存储目录（运行时生成）
-│   └── zerovector_storage/        # ZeroVector数据文件
-│       ├── zerovector_storage.tree      # 语义树文件
-│       ├── zerovector_storage_shards/   # 分片存储目录
-│       ├── zerovector_storage.dict     # 关键词字典文件
-│       ├── zerovector_storage_docs/    # 文档副本目录
-│       ├── zerovector_storage.store    # 文档存储文件
-│       └── zerovector_storage.index    # 索引文件
-├── zerovector-core/               # 核心模块
-├── zerovector-spring-boot-starter/  # Spring Boot Starter
-├── zerovector-spring-boot-example/  # 示例应用
-└── zerovector-app/                # 独立应用
+├── data/                              # 数据存储目录（运行时生成）
+│   └── knowledge_bases/               # 知识库基础目录
+│       ├── default/                   # 默认知识库
+│       │   ├── zerovector_storage.data      # mmap 数据文件
+│       │   ├── zerovector_storage.data.index # mmap 索引文件
+│       │   ├── zerovector_storage.tree      # 语义树文件
+│       │   ├── zerovector_storage.dict      # 关键词字典文件
+│       │   ├── zerovector_storage_docs/     # 文档副本目录
+│       │   └── zerovector_storage_shards/   # 分片存储目录
+│       └── custom_kb/                 # 自定义知识库
+│           └── ...
+├── zerovector-core/                   # 核心模块
+├── zerovector-spring-boot-starter/    # Spring Boot Starter
+├── zerovector-spring-boot-example/    # 示例应用
+└── zerovector-app/                    # 独立应用
 ```
 
 ## 核心组件
@@ -66,6 +61,57 @@ ZeroVector/
 - **TreeBuilder** - 语义树构建器，使用虚拟线程并发处理
 - **ShardedTreeStorage** - 分片存储引擎，按需加载
 - **CachedLLMProvider** - LLM调用缓存层，减少API调用
+- **Storage SPI** - 存储层 SPI 接口，支持第三方扩展
+
+## 存储层 SPI 扩展
+
+ZeroVector 提供了存储层 SPI 扩展机制，支持第三方实现不同的存储后端。
+
+### 三类存储接口
+
+| 接口 | 说明 | 适用存储介质 |
+|------|------|-------------|
+| `ChunkStorage` | 文档分片存储 | 本地文件(mmap)、Elasticsearch、数据库 |
+| `DictionaryStorage` | 字典存储 | 本地文件、Elasticsearch、Redis |
+| `DocumentCopyStorage` | 文件副本存储 | 本地文件系统、MinIO、OSS、S3 |
+
+### 实现自定义存储
+
+```java
+@StorageProvider(type = "elasticsearch", priority = 10, description = "Elasticsearch 存储")
+public class ElasticsearchChunkStorage implements ChunkStorage {
+    
+    @Override
+    public void initialize(ChunkStorageConfig config) throws StorageException {
+        // 从 config.getExtended() 获取 ES 配置
+        String hosts = config.getExtended("hosts");
+        String index = config.getExtended("index");
+        // 初始化 ES 客户端...
+    }
+    
+    @Override
+    public String getStorageType() {
+        return "elasticsearch";
+    }
+    
+    // 实现其他方法...
+}
+```
+
+### SPI 注册
+
+在 `META-INF/services/` 目录下创建文件：
+
+```
+META-INF/services/cn.nexon.zerovector.core.storage.spi.ChunkStorage
+```
+
+文件内容为实现类的全限定名：
+
+```
+com.example.ElasticsearchChunkStorage
+```
+
 ## 快速开始
 
 ### 环境要求
@@ -98,7 +144,7 @@ LLMProvider llmProvider = new YourLLMProvider();
 DocumentComprehender documentComprehender = new DocumentComprehender(llmProvider, 4000);
 
 // 创建语义树管理器
-Path storagePath = Paths.get("./data/zerovector_storage");
+Path storagePath = Paths.get("./data/knowledge_bases/default");
 SemanticTreeManager manager = new SemanticTreeManager(
     llmProvider, 
     documentComprehender, 
@@ -126,28 +172,28 @@ ZeroVector 支持动态创建和管理多个独立的知识库，每个知识库
 
 ```java
 @Autowired
-private SemanticFacade semanticFacade;
+private SemanticHub semanticHub;
 
 // 创建新知识库
-String kbName = semanticFacade.createKnowledgeBase("tech-docs");
+String kbName = semanticHub.createKnowledgeBase("tech-docs");
 
 // 添加文档到指定知识库
-semanticFacade.addDocument(Paths.get("document.md"), "tech-docs");
+semanticHub.addDocument(Paths.get("document.md"), "tech-docs");
 
 // 查询指定知识库
-SearchResult result = semanticFacade.search("什么是单例模式？", "tech-docs");
+SearchResult result = semanticHub.search("什么是单例模式？", "tech-docs");
 
 // 切换知识库
-semanticFacade.switchKnowledgeBase("product-docs");
+semanticHub.switchKnowledgeBase("product-docs");
 
 // 列出所有知识库
-List<String> names = semanticFacade.listKnowledgeBases();
+List<String> names = semanticHub.listKnowledgeBases();
 
 // 删除知识库
-semanticFacade.deleteKnowledgeBase("old-docs");
+semanticHub.deleteKnowledgeBase("old-docs");
 
 // 获取当前知识库名称
-String currentKb = semanticFacade.getCurrentKnowledgeBase();
+String currentKb = semanticHub.getCurrentKnowledgeBase();
 ```
 
 ### Spring Boot 配置
@@ -213,14 +259,14 @@ zerovector:
 public class YourService {
     
     @Autowired
-    private SemanticFacade semanticFacade;
+    private SemanticHub semanticHub;
     
     public void addDocument(Path filePath) {
-        semanticFacade.addDocument(filePath);
+        semanticHub.addDocument(filePath);
     }
     
     public SearchResult search(String query) {
-        return semanticFacade.search(query);
+        return semanticHub.search(query);
     }
 }
 ```
@@ -252,6 +298,10 @@ public class YourService {
 ### 分片存储优化
 
 支持将大型语义树拆分为多个小文件，按需加载，大幅减少内存占用和启动时间。
+
+### 存储层可扩展
+
+通过 SPI 机制，支持将存储扩展到 Elasticsearch、Redis、MinIO 等外部系统，满足不同场景需求。
 
 ## 使用场景
 

@@ -4,7 +4,9 @@ import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import jakarta.validation.constraints.NotBlank;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -52,6 +54,9 @@ public class ZeroVectorProperties {
 
     @Valid
     private Hook hook = new Hook();
+
+    @Valid
+    private Storage storage = new Storage();
 
     public boolean isEnabled() {
         return enabled;
@@ -136,6 +141,14 @@ public class ZeroVectorProperties {
 
     public void setHook(Hook hook) {
         this.hook = hook;
+    }
+
+    public Storage getStorage() {
+        return storage;
+    }
+
+    public void setStorage(Storage storage) {
+        this.storage = storage;
     }
 
     /**
@@ -325,6 +338,165 @@ public class ZeroVectorProperties {
 
         public void setHooks(List<String> hooks) {
             this.hooks = hooks;
+        }
+    }
+
+    /**
+     * 存储配置
+     */
+    public static class Storage {
+        private ChunkStorageConfig chunk = new ChunkStorageConfig();
+        private DictStorageConfig dictionary = new DictStorageConfig();
+        private DocCopyStorageConfig documentCopy = new DocCopyStorageConfig();
+
+        public ChunkStorageConfig getChunk() {
+            return chunk;
+        }
+
+        public void setChunk(ChunkStorageConfig chunk) {
+            this.chunk = chunk;
+        }
+
+        public DictStorageConfig getDictionary() {
+            return dictionary;
+        }
+
+        public void setDictionary(DictStorageConfig dictionary) {
+            this.dictionary = dictionary;
+        }
+
+        public DocCopyStorageConfig getDocumentCopy() {
+            return documentCopy;
+        }
+
+        public void setDocumentCopy(DocCopyStorageConfig documentCopy) {
+            this.documentCopy = documentCopy;
+        }
+    }
+
+    /**
+     * 文档分片存储配置
+     */
+    public static class ChunkStorageConfig {
+        private String type = "local-mmap";
+        private String basePath;
+        private boolean useMmap = true;
+        private boolean sharded = false;
+        private int shardSize = 100;
+        private Map<String, Object> extended = new HashMap<>();
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getBasePath() {
+            return basePath;
+        }
+
+        public void setBasePath(String basePath) {
+            this.basePath = basePath;
+        }
+
+        public boolean isUseMmap() {
+            return useMmap;
+        }
+
+        public void setUseMmap(boolean useMmap) {
+            this.useMmap = useMmap;
+        }
+
+        public boolean isSharded() {
+            return sharded;
+        }
+
+        public void setSharded(boolean sharded) {
+            this.sharded = sharded;
+        }
+
+        public int getShardSize() {
+            return shardSize;
+        }
+
+        public void setShardSize(int shardSize) {
+            this.shardSize = shardSize;
+        }
+
+        public Map<String, Object> getExtended() {
+            return extended;
+        }
+
+        public void setExtended(Map<String, Object> extended) {
+            this.extended = extended;
+        }
+    }
+
+    /**
+     * 字典存储配置
+     */
+    public static class DictStorageConfig {
+        private String type = "local-file";
+        private String filePath;
+        private Map<String, Object> extended = new HashMap<>();
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getFilePath() {
+            return filePath;
+        }
+
+        public void setFilePath(String filePath) {
+            this.filePath = filePath;
+        }
+
+        public Map<String, Object> getExtended() {
+            return extended;
+        }
+
+        public void setExtended(Map<String, Object> extended) {
+            this.extended = extended;
+        }
+    }
+
+    /**
+     * 文件副本存储配置
+     */
+    public static class DocCopyStorageConfig {
+        private String type = "local-file";
+        private String directory;
+        private Map<String, Object> extended = new HashMap<>();
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getDirectory() {
+            return directory;
+        }
+
+        public void setDirectory(String directory) {
+            this.directory = directory;
+        }
+
+        public Map<String, Object> getExtended() {
+            return extended;
+        }
+
+        public void setExtended(Map<String, Object> extended) {
+            this.extended = extended;
         }
     }
 }
