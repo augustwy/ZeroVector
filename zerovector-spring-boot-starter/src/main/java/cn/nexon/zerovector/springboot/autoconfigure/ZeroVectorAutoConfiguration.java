@@ -9,10 +9,10 @@ import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.hook.LifecycleHook;
 import cn.nexon.zerovector.core.hook.HookExecutor;
 import cn.nexon.zerovector.core.hook.HookRegistry;
-import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMProvider;
-import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMProvider;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
-import cn.nexon.zerovector.springboot.service.SemanticFacade;
+import cn.nexon.zerovector.springboot.SemanticHub;
+import cn.nexon.zerovector.springboot.provider.LangChain4jLLMProvider;
+import cn.nexon.zerovector.springboot.provider.SpringAiLLMProvider;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -223,7 +223,7 @@ public class ZeroVectorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
-    SemanticFacade semanticFacade(KnowledgeBaseManager knowledgeBaseManager) {
-        return new SemanticFacade(knowledgeBaseManager);
+    SemanticHub semanticHub(KnowledgeBaseManager knowledgeBaseManager) {
+        return new SemanticHub(knowledgeBaseManager);
     }
 }

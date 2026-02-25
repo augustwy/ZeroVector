@@ -3,6 +3,7 @@ package cn.nexon.zerovector.core.tree;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
+import cn.nexon.zerovector.core.ai.LLMUsageStats;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
 import cn.nexon.zerovector.core.hook.HookContext;
@@ -13,7 +14,6 @@ import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import cn.nexon.zerovector.core.util.JsonUtils;
-import cn.nexon.zerovector.core.util.PerformanceMonitor;
 import cn.nexon.zerovector.core.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +22,10 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * 语义树构建器
+ * 负责根据文档理解结果构建语义树结构
+ */
 public class TreeBuilder {
     private static final Logger logger = LoggerFactory.getLogger(TreeBuilder.class);
     private static final int CLUSTERING_THRESHOLD = 5;
@@ -42,10 +46,18 @@ public class TreeBuilder {
         this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
     }
 
-    public SemanticTree build(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunks) {
+    /**
+     * 构建语义树
+     *
+     * @param comprehendResultMap 文档理解结果映射
+     * @param chunks 文档块映射
+     * @return 树构建结果，包含语义树和 LLM 调用统计
+     */
+    public TreeBuildResult build(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunks) {
         long startTime = System.currentTimeMillis();
+        LLMUsageStats stats = new LLMUsageStats();
         
-        TreeBuildResult result = buildRecursiveWithNodes("Root", comprehendResultMap);
+        TreeBuildInternalResult result = buildRecursiveWithNodes("Root", comprehendResultMap, stats);
         TreeNode root = result.root();
         
         long duration = System.currentTimeMillis() - startTime;
@@ -53,10 +65,12 @@ public class TreeBuilder {
             HookContext.builder(HookType.TREE_BUILD_END)
                 .data("documentCount", comprehendResultMap.size())
                 .data("nodeCount", result.nodes().size())
+                .data("llmUsageStats", stats)
                 .durationMillis(duration)
         );
         
-        return new SemanticTree(root, result.nodes(), chunks);
+        SemanticTree tree = new SemanticTree(root, result.nodes(), chunks);
+        return new TreeBuildResult(tree, stats);
     }
 
     /**
@@ -66,10 +80,11 @@ public class TreeBuilder {
      * @param existingTree 现有的语义树
      * @param newResults 新文档的理解结果列表
      * @param newChunks 新文档的文档块映射表
-     * @return 更新后的语义树
+     * @return 树构建结果，包含更新后的语义树和 LLM 调用统计
      */
-    public SemanticTree updateTree(SemanticTree existingTree, List<DocumentComprehendResult> newResults, Map<String, DocumentChunk> newChunks) {
+    public TreeBuildResult updateTree(SemanticTree existingTree, List<DocumentComprehendResult> newResults, Map<String, DocumentChunk> newChunks) {
         long startTime = System.currentTimeMillis();
+        LLMUsageStats stats = new LLMUsageStats();
         
         if (existingTree == null || existingTree.rootNode() == null) {
             Map<String, DocumentComprehendResult> resultMap = new HashMap<>();
@@ -96,6 +111,8 @@ public class TreeBuilder {
             if (chunk == null) {
                 continue;
             }
+            
+            stats.merge(result.llmUsageStats());
             
             TreeNode targetNode = findBestNodeForDocument(currentRoot, existingTree, result);
             
@@ -228,32 +245,34 @@ public class TreeBuilder {
             HookContext.builder(HookType.TREE_BUILD_END)
                 .data("documentCount", updatedChunks.size())
                 .data("nodeCount", updatedNodes.size())
+                .data("llmUsageStats", stats)
                 .durationMillis(duration)
         );
         
-        return new SemanticTree(currentRoot, updatedNodes, updatedChunks);
+        SemanticTree tree = new SemanticTree(currentRoot, updatedNodes, updatedChunks);
+        return new TreeBuildResult(tree, stats);
     }
 
-    private TreeBuildResult buildRecursiveWithNodes(String name, Map<String, DocumentComprehendResult> documents) {
+    private TreeBuildInternalResult buildRecursiveWithNodes(String name, Map<String, DocumentComprehendResult> documents, LLMUsageStats stats) {
         Map<String, TreeNode> allNodes = new ConcurrentHashMap<>();
         
         if (documents.size() <= CLUSTERING_THRESHOLD) {
-            return buildSmallDocumentSet(name, documents, allNodes);
+            return buildSmallDocumentSet(name, documents, allNodes, stats);
         }
         
-        return buildLargeDocumentSet(name, documents, allNodes);
+        return buildLargeDocumentSet(name, documents, allNodes, stats);
     }
 
-    private TreeBuildResult buildSmallDocumentSet(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes) {
+    private TreeBuildInternalResult buildSmallDocumentSet(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes, LLMUsageStats stats) {
         try {
-            List<NodeCategory> categories = performDocumentClustering(documents);
+            List<NodeCategory> categories = performDocumentClustering(documents, stats);
             
             if (shouldCreateSingleLeafNode(categories, documents)) {
                 return createSingleLeafNodeResult(name, categories.get(0).getDocuments(), allNodes);
             }
             
             if (categories.size() > 1) {
-                return buildMultiCategoryTree(name, documents, categories, allNodes);
+                return buildMultiCategoryTree(name, documents, categories, allNodes, stats);
             }
         } catch (Exception e) {
             logger.warn("聚类失败，创建叶子节点: {}", e.getMessage());
@@ -262,23 +281,21 @@ public class TreeBuilder {
         return createSingleLeafNodeResult(name, documents, allNodes);
     }
 
-    private TreeBuildResult buildLargeDocumentSet(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes) {
-        List<NodeCategory> categories = performDocumentClustering(documents);
-        return buildMultiCategoryTree(name, documents, categories, allNodes);
+    private TreeBuildInternalResult buildLargeDocumentSet(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes, LLMUsageStats stats) {
+        List<NodeCategory> categories = performDocumentClustering(documents, stats);
+        return buildMultiCategoryTree(name, documents, categories, allNodes, stats);
     }
 
-    private List<NodeCategory> performDocumentClustering(Map<String, DocumentComprehendResult> documents) {
+    private List<NodeCategory> performDocumentClustering(Map<String, DocumentComprehendResult> documents, LLMUsageStats stats) {
         List<String> summaries = documents.values().stream()
             .map(DocumentComprehendResult::summary)
             .toList();
         
-        PerformanceMonitor clusterMonitor = new PerformanceMonitor("TreeBuilder.clusterDocuments");
-        clusterMonitor.start();
         String clusterPrompt = LLMPromptTemplates.clusterDocumentChunks(summaries);
         LLMResponse response = llm.clusterDocuments(clusterPrompt);
-        clusterMonitor.stop();
+        stats.add(response);
         
-        logger.debug("聚类操作耗时: {}ms", clusterMonitor.getDurationMillis());
+        logger.debug("聚类操作完成");
         
         return parseClusterResponse(response.content(), documents);
     }
@@ -287,46 +304,46 @@ public class TreeBuilder {
         return categories.size() == 1 && categories.get(0).getDocuments().size() == documents.size();
     }
 
-    private TreeBuildResult createSingleLeafNodeResult(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes) {
+    private TreeBuildInternalResult createSingleLeafNodeResult(String name, Map<String, DocumentComprehendResult> documents, Map<String, TreeNode> allNodes) {
         TreeNode leafNode = createLeafNode(name, documents);
         allNodes.put(leafNode.id(), leafNode);
-        return new TreeBuildResult(leafNode, allNodes);
+        return new TreeBuildInternalResult(leafNode, allNodes);
     }
 
-    private TreeBuildResult buildMultiCategoryTree(String name, Map<String, DocumentComprehendResult> documents, List<NodeCategory> categories, Map<String, TreeNode> allNodes) {
+    private TreeBuildInternalResult buildMultiCategoryTree(String name, Map<String, DocumentComprehendResult> documents, List<NodeCategory> categories, Map<String, TreeNode> allNodes, LLMUsageStats stats) {
         List<String> childIds = new ArrayList<>();
         
         for (NodeCategory cat : categories) {
-            processCategory(cat, allNodes, childIds);
+            processCategory(cat, allNodes, childIds, stats);
         }
         
-        TreeNode categoryNode = buildCategoryNode(name, documents, categories.size(), childIds);
+        TreeNode categoryNode = buildCategoryNode(name, documents, categories.size(), childIds, stats);
         allNodes.put(categoryNode.id(), categoryNode);
         
-        return new TreeBuildResult(categoryNode, allNodes);
+        return new TreeBuildInternalResult(categoryNode, allNodes);
     }
 
-    private void processCategory(NodeCategory cat, Map<String, TreeNode> allNodes, List<String> childIds) {
+    private void processCategory(NodeCategory cat, Map<String, TreeNode> allNodes, List<String> childIds, LLMUsageStats stats) {
         String summariesText = StringUtils.joinWithSpace(
             cat.getDocuments().values().stream()
                 .map(DocumentComprehendResult::summary)
                 .toList()
         );
         
-        NodeMetadata metadata = extractNodeMetadata(summariesText);
+        NodeMetadata metadata = extractNodeMetadata(summariesText, stats);
         
-        logger.debug("关键词提取耗时: {}ms, 节点: {}", metadata.extractionTime(), cat.getName());
+        logger.debug("关键词提取完成, 节点: {}", cat.getName());
         
         dictionary.addEntries(metadata.keywords(), cat.getNodeId());
         
-        TreeBuildResult childResult = buildRecursiveWithNodes(cat.getName(), cat.getDocuments());
+        TreeBuildInternalResult childResult = buildRecursiveWithNodes(cat.getName(), cat.getDocuments(), stats);
         TreeNode childNode = childResult.root();
         childIds.add(childNode.id());
         
         allNodes.putAll(childResult.nodes());
     }
 
-    private TreeNode buildCategoryNode(String name, Map<String, DocumentComprehendResult> documents, int categoryCount, List<String> childIds) {
+    private TreeNode buildCategoryNode(String name, Map<String, DocumentComprehendResult> documents, int categoryCount, List<String> childIds, LLMUsageStats stats) {
         String nodeId = UUID.randomUUID().toString();
         String allSummaries = StringUtils.joinWithSpace(
             documents.values().stream()
@@ -334,9 +351,9 @@ public class TreeBuilder {
                 .toList()
         );
         
-        NodeMetadata metadata = extractNodeMetadata(allSummaries);
+        NodeMetadata metadata = extractNodeMetadata(allSummaries, stats);
         
-        logger.debug("节点关键词提取耗时: {}ms", metadata.extractionTime());
+        logger.debug("节点关键词提取完成");
         
         dictionary.addEntries(metadata.keywords(), nodeId);
         
@@ -353,10 +370,7 @@ public class TreeBuilder {
         );
     }
 
-    private NodeMetadata extractNodeMetadata(String summariesText) {
-        PerformanceMonitor keywordsMonitor = new PerformanceMonitor("TreeBuilder.extractKeywords");
-        keywordsMonitor.start();
-        
+    private NodeMetadata extractNodeMetadata(String summariesText, LLMUsageStats stats) {
         String keywordsPrompt = LLMPromptTemplates.extractKeywords(summariesText);
         String entitiesPrompt = LLMPromptTemplates.extractEntities(summariesText);
         String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
@@ -365,16 +379,18 @@ public class TreeBuilder {
         LLMResponse entitiesResponse = llm.extractEntities(entitiesPrompt);
         LLMResponse examplesResponse = llm.generateExampleQuestions(examplesPrompt);
         
+        stats.add(keywordsResponse);
+        stats.add(entitiesResponse);
+        stats.add(examplesResponse);
+        
         List<String> keywords = parseListResponse(keywordsResponse.content());
         List<String> entities = parseListResponse(entitiesResponse.content());
         List<String> examples = parseListResponse(examplesResponse.content());
         
-        keywordsMonitor.stop();
-        
-        return new NodeMetadata(keywords, entities, examples, keywordsMonitor.getDurationMillis());
+        return new NodeMetadata(keywords, entities, examples);
     }
 
-    private record NodeMetadata(List<String> keywords, List<String> entities, List<String> examples, long extractionTime) {}
+    private record NodeMetadata(List<String> keywords, List<String> entities, List<String> examples) {}
 
     private TreeNode createLeafNode(String name, Map<String, DocumentComprehendResult> documents) {
         String nodeId = UUID.randomUUID().toString();
@@ -510,6 +526,11 @@ public class TreeBuilder {
     }
 
     public record TreeBuildResult(
+        SemanticTree tree,
+        LLMUsageStats llmUsageStats
+    ) {}
+    
+    private record TreeBuildInternalResult(
         TreeNode root,
         Map<String, TreeNode> nodes
     ) {}

@@ -1,4 +1,4 @@
-package cn.nexon.zerovector.springboot.service.impl;
+package cn.nexon.zerovector.springboot.provider;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;

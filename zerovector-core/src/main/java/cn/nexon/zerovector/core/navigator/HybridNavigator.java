@@ -3,6 +3,7 @@ package cn.nexon.zerovector.core.navigator;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
+import cn.nexon.zerovector.core.ai.LLMUsageStats;
 import cn.nexon.zerovector.core.exception.NavigationException;
 import cn.nexon.zerovector.core.exception.PromptLoadException;
 import cn.nexon.zerovector.core.hook.HookContext;
@@ -12,7 +13,6 @@ import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
-import cn.nexon.zerovector.core.util.PerformanceMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,6 +23,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+/**
+ * 混合导航器
+ * 结合关键词匹配和 LLM 决策进行语义树导航
+ */
 public class HybridNavigator {
     private static final Logger logger = LoggerFactory.getLogger(HybridNavigator.class);
     
@@ -44,8 +48,16 @@ public class HybridNavigator {
         this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
     }
     
+    /**
+     * 执行导航
+     * 根据查询在语义树中导航，返回相关文档
+     *
+     * @param query 查询字符串
+     * @return 导航结果，包含 LLM 调用统计数据
+     */
     public NavigationResult navigate(String query) {
         long startTime = System.currentTimeMillis();
+        LLMUsageStats stats = new LLMUsageStats();
         
         try {
             String fastTrackNodeId = null;
@@ -53,6 +65,7 @@ public class HybridNavigator {
             try {
                 String keywordsPrompt = LLMPromptTemplates.extractQueryKeywords(query);
                 LLMResponse keywordsResponse = llm.extractQueryKeywords(keywordsPrompt);
+                stats.add(keywordsResponse);
                 
                 List<String> extractedKeywords = parseKeywordsResponse(keywordsResponse.content());
                 
@@ -84,7 +97,7 @@ public class HybridNavigator {
                     "无法获取起始节点进行导航");
             }
                 
-            return navigateInternal(query, currentNode, new ArrayList<>(), startTime);
+            return navigateInternal(query, currentNode, new ArrayList<>(), startTime, stats);
         } catch (NavigationException e) {
             throw e;
         } catch (Exception e) {
@@ -93,7 +106,7 @@ public class HybridNavigator {
         }
     }
     
-    private NavigationResult navigateInternal(String query, TreeNode startNode, List<NavigationPath> navigationHistory, long startTime) {
+    private NavigationResult navigateInternal(String query, TreeNode startNode, List<NavigationPath> navigationHistory, long startTime, LLMUsageStats stats) {
         List<TreeNode> path = new ArrayList<>();
         path.add(startNode);
         TreeNode current = startNode;
@@ -116,13 +129,14 @@ public class HybridNavigator {
             String prompt = buildNavigationPrompt(query, current);
             
             LLMResponse response = llm.decideNavigation(prompt);
+            stats.add(response);
             
             NavigationAction action = parseNavigationResponse(response.content(), getCurrentChildNodes(current));
             
             switch (action) {
                 case NavigationAction.SelectChild(String nodeId, String reasoning, double conf) -> {
                     if (conf < 0.3) {
-                        return handleFallback(query, navigationHistory);
+                        return handleFallback(query, navigationHistory, stats);
                     }
                     TreeNode nextNode = tree.getNode(nodeId);
                     if (nextNode != null) {
@@ -140,16 +154,17 @@ public class HybridNavigator {
                     }
                 }
                 case NavigationAction.ExpandMultiple(List<String> nodeIds, String reasoning) -> {
-                    return handleMultiPath(query, nodeIds, navigationHistory);
+                    return handleMultiPath(query, nodeIds, navigationHistory, stats);
                 }
                 case NavigationAction.FallbackSearch(String reason) -> {
-                    return handleFallback(query, navigationHistory);
+                    return handleFallback(query, navigationHistory, stats);
                 }
                 case NavigationAction.Stop(String reasoning) -> {
                     return new NavigationResult(
                         List.of(),
                         reasoning,
-                        navigationHistory
+                        navigationHistory,
+                        stats
                     );
                 }
                 default -> {
@@ -172,13 +187,15 @@ public class HybridNavigator {
                 .data("query", query)
                 .data("resultCount", chunks.size())
                 .data("stepCount", stepCount)
+                .data("llmUsageStats", stats)
                 .durationMillis(duration)
         );
         
         return new NavigationResult(
             chunks,
             "Reached leaf node: " + current.name(),
-            navigationHistory
+            navigationHistory,
+            stats
         );
     }
     
@@ -203,7 +220,7 @@ public class HybridNavigator {
         );
     }
     
-    private NavigationResult handleMultiPath(String query, List<String> nodeIds, List<NavigationPath> navigationHistory) {
+    private NavigationResult handleMultiPath(String query, List<String> nodeIds, List<NavigationPath> navigationHistory, LLMUsageStats stats) {
         List<DocumentChunk> allChunks = new ArrayList<>();
         List<String> allNodeIds = new ArrayList<>();
         
@@ -226,11 +243,12 @@ public class HybridNavigator {
         return new NavigationResult(
             allChunks,
             "Multi-path expansion across " + nodeIds.size() + " nodes",
-            navigationHistory
+            navigationHistory,
+            stats
         );
     }
     
-    private NavigationResult handleFallback(String query, List<NavigationPath> navigationHistory) {
+    private NavigationResult handleFallback(String query, List<NavigationPath> navigationHistory, LLMUsageStats stats) {
         Map<String, Double> candidates = dictionary.matchCandidates(query);
         
         if (candidates.isEmpty()) {
@@ -242,7 +260,8 @@ public class HybridNavigator {
             return new NavigationResult(
                 List.of(),
                 "No results found",
-                navigationHistory
+                navigationHistory,
+                stats
             );
         }
         
@@ -262,7 +281,8 @@ public class HybridNavigator {
                 return new NavigationResult(
                     loadChunks(node.chunkIds()),
                     "Fallback search result: " + node.name(),
-                    navigationHistory
+                    navigationHistory,
+                    stats
                 );
             }
         }
@@ -275,7 +295,8 @@ public class HybridNavigator {
         return new NavigationResult(
             List.of(),
             "Fallback search failed",
-            navigationHistory
+            navigationHistory,
+            stats
         );
     }
     

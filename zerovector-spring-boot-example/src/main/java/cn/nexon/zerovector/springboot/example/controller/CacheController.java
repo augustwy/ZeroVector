@@ -3,7 +3,7 @@ package cn.nexon.zerovector.springboot.example.controller;
 import cn.nexon.zerovector.core.ai.CacheConfig;
 import cn.nexon.zerovector.core.ai.CacheStatistics;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
-import cn.nexon.zerovector.springboot.service.SemanticFacade;
+import cn.nexon.zerovector.springboot.SemanticHub;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,11 +17,11 @@ import java.util.concurrent.TimeUnit;
 @RequestMapping("/api/cache")
 public class CacheController {
 
-    private final SemanticFacade semanticFacade;
+    private final SemanticHub semanticHub;
 
     @Autowired
-    public CacheController(SemanticFacade semanticFacade) {
-        this.semanticFacade = semanticFacade;
+    public CacheController(SemanticHub semanticHub) {
+        this.semanticHub = semanticHub;
     }
 
     @GetMapping("/statistics")
@@ -29,7 +29,7 @@ public class CacheController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            Map<SmartCacheStrategy.RequestType, CacheStatistics> stats = semanticFacade.getCacheStatistics();
+            Map<SmartCacheStrategy.RequestType, CacheStatistics> stats = semanticHub.getCacheStatistics();
 
             Map<String, Object> statisticsMap = new HashMap<>();
             stats.forEach((type, stat) -> {
@@ -48,7 +48,7 @@ public class CacheController {
 
             response.put("success", true);
             response.put("statistics", statisticsMap);
-            response.put("totalCacheSize", semanticFacade.getTotalCacheSize());
+            response.put("totalCacheSize", semanticHub.getTotalCacheSize());
 
             return ResponseEntity.ok(response);
 
@@ -65,7 +65,7 @@ public class CacheController {
 
         try {
             SmartCacheStrategy.RequestType requestType = SmartCacheStrategy.RequestType.valueOf(type.toUpperCase());
-            CacheStatistics stats = semanticFacade.getCacheStatistics(requestType);
+            CacheStatistics stats = semanticHub.getCacheStatistics(requestType);
 
             if (stats == null) {
                 response.put("success", false);
@@ -87,7 +87,7 @@ public class CacheController {
             response.put("success", true);
             response.put("type", type);
             response.put("statistics", statData);
-            response.put("cacheSize", semanticFacade.getCacheSize(requestType));
+            response.put("cacheSize", semanticHub.getCacheSize(requestType));
 
             return ResponseEntity.ok(response);
 
@@ -107,7 +107,7 @@ public class CacheController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            semanticFacade.clearCache();
+            semanticHub.clearCache();
 
             response.put("success", true);
             response.put("message", "所有缓存已清除");
@@ -127,7 +127,7 @@ public class CacheController {
 
         try {
             SmartCacheStrategy.RequestType requestType = SmartCacheStrategy.RequestType.valueOf(type.toUpperCase());
-            semanticFacade.clearCache(requestType);
+            semanticHub.clearCache(requestType);
 
             response.put("success", true);
             response.put("message", "缓存类型 " + type + " 已清除");
@@ -157,7 +157,7 @@ public class CacheController {
                 warmupPrompts.put(type, entry.getValue());
             }
 
-            semanticFacade.warmupCache(warmupPrompts);
+            semanticHub.warmupCache(warmupPrompts);
 
             response.put("success", true);
             response.put("message", "缓存预热完成");
@@ -191,7 +191,7 @@ public class CacheController {
             TimeUnit timeUnit = TimeUnit.valueOf(timeUnitStr.toUpperCase());
 
             CacheConfig config = new CacheConfig(maxSize, expireAfterAccess, timeUnit, true, "");
-            semanticFacade.updateCacheConfig(requestType, config);
+            semanticHub.updateCacheConfig(requestType, config);
 
             response.put("success", true);
             response.put("message", "缓存配置已更新");
@@ -223,12 +223,12 @@ public class CacheController {
             Map<String, Long> sizeMap = new HashMap<>();
 
             for (SmartCacheStrategy.RequestType type : SmartCacheStrategy.RequestType.values()) {
-                sizeMap.put(type.name().toLowerCase(), semanticFacade.getCacheSize(type));
+                sizeMap.put(type.name().toLowerCase(), semanticHub.getCacheSize(type));
             }
 
             response.put("success", true);
             response.put("sizes", sizeMap);
-            response.put("totalSize", semanticFacade.getTotalCacheSize());
+            response.put("totalSize", semanticHub.getTotalCacheSize());
 
             return ResponseEntity.ok(response);
 
@@ -244,7 +244,7 @@ public class CacheController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            semanticFacade.logCacheStatistics();
+            semanticHub.logCacheStatistics();
 
             response.put("success", true);
             response.put("message", "缓存统计已记录到日志");

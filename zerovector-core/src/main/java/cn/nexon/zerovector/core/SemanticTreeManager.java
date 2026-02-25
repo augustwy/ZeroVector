@@ -1,6 +1,7 @@
 package cn.nexon.zerovector.core;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.LLMUsageStats;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
@@ -13,6 +14,7 @@ import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.DocumentChunk;
+import cn.nexon.zerovector.core.model.DocumentUploadResult;
 import cn.nexon.zerovector.core.model.NavigationResult;
 import cn.nexon.zerovector.core.model.SemanticTree;
 import cn.nexon.zerovector.core.navigator.HybridNavigator;
@@ -35,6 +37,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * 语义树管理器
+ * 负责语义树的构建、更新和导航
+ */
 public class SemanticTreeManager {
     private static final Logger logger = LoggerFactory.getLogger(SemanticTreeManager.class);
 
@@ -117,8 +123,15 @@ public class SemanticTreeManager {
         }
     }
 
+    /**
+     * 构建语义树
+     *
+     * @param documents 文档列表
+     */
     public void buildTree(List<Document> documents) {
         long startTime = System.currentTimeMillis();
+        LLMUsageStats totalStats = new LLMUsageStats();
+        
         hookExecutor.executeHooks(HookType.TREE_BUILD_START, 
             HookContext.builder(HookType.TREE_BUILD_START)
                 .data("documentCount", documents.size())
@@ -126,7 +139,15 @@ public class SemanticTreeManager {
         
         try {
             DocumentProcessingResult processingResult = processDocuments(documents);
-            this.semanticTree = buildTreeInternal(processingResult.comprehendResultMap(), processingResult.chunkMap());
+            
+            for (DocumentComprehendResult result : processingResult.comprehendResultMap().values()) {
+                totalStats.merge(result.llmUsageStats());
+            }
+            
+            TreeBuilder.TreeBuildResult buildResult = buildTreeInternal(processingResult.comprehendResultMap(), processingResult.chunkMap());
+            this.semanticTree = buildResult.tree();
+            totalStats.merge(buildResult.llmUsageStats());
+            
             this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
             this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore, hookExecutor);
             
@@ -135,6 +156,7 @@ public class SemanticTreeManager {
                 HookContext.builder(HookType.TREE_BUILD_END)
                     .data("documentCount", documents.size())
                     .data("nodeCount", semanticTree.nodes().size())
+                    .data("llmUsageStats", totalStats)
                     .durationMillis(duration)
             );
             
@@ -148,6 +170,7 @@ public class SemanticTreeManager {
             hookExecutor.executeHooks(HookType.TREE_BUILD_ERROR,
                 HookContext.builder(HookType.TREE_BUILD_ERROR)
                     .data("documentCount", documents.size())
+                    .data("llmUsageStats", totalStats)
                     .durationMillis(duration)
                     .error(e)
             );
@@ -187,7 +210,7 @@ public class SemanticTreeManager {
         Map<String, DocumentChunk> chunkMap
     ) {}
     
-    private SemanticTree buildTreeInternal(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
+    private TreeBuilder.TreeBuildResult buildTreeInternal(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
         TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties, hookExecutor);
         
         if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
@@ -197,8 +220,16 @@ public class SemanticTreeManager {
         }
     }
 
-    public void addDocument(Path filePath) {
+    /**
+     * 添加单个文档
+     *
+     * @param filePath 文件路径
+     * @return 文档上传结果，包含 LLM 调用统计
+     */
+    public DocumentUploadResult addDocument(Path filePath) {
         long startTime = System.currentTimeMillis();
+        LLMUsageStats totalStats = new LLMUsageStats();
+        
         hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_START,
             HookContext.builder(HookType.DOCUMENT_UPLOAD_START)
                 .data("filePath", filePath.toString())
@@ -214,16 +245,20 @@ public class SemanticTreeManager {
                         .data("filePath", filePath.toString())
                         .data("skipped", true)
                         .data("reason", "Document already exists")
+                        .data("llmUsageStats", totalStats)
                         .durationMillis(duration)
                 );
-                return;
+                return DocumentUploadResult.skipped(null, "文档已存在，跳过处理");
             }
             
             Path copiedFile = createDocumentCopy(filePath);
             Document document = createDocumentFromFile(filePath, copiedFile, md5);
             
             DocumentProcessingResult processingResult = processSingleDocument(document);
-            updateSemanticTreeFromDocuments(processingResult.comprehendResultMap(), processingResult.chunkMap());
+            totalStats.merge(processingResult.comprehendResultMap().get(document.id()).llmUsageStats());
+            
+            TreeBuilder.TreeBuildResult buildResult = updateSemanticTreeFromDocuments(processingResult.comprehendResultMap(), processingResult.chunkMap());
+            totalStats.merge(buildResult.llmUsageStats());
 
             long duration = System.currentTimeMillis() - startTime;
             hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_END,
@@ -231,21 +266,23 @@ public class SemanticTreeManager {
                     .data("filePath", filePath.toString())
                     .data("documentTitle", document.title())
                     .data("documentCount", semanticTree.chunks().size())
+                    .data("llmUsageStats", totalStats)
                     .durationMillis(duration)
             );
-            
-            logger.debug("添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
             
             try {
                 saveTree();
             } catch (IOException e) {
                 throw new StorageException(treeFilePath, "saveTree", e);
             }
+            
+            return DocumentUploadResult.success(document.id(), document.title(), totalStats);
         } catch (StorageException e) {
             long duration = System.currentTimeMillis() - startTime;
             hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_ERROR,
                 HookContext.builder(HookType.DOCUMENT_UPLOAD_ERROR)
                     .data("filePath", filePath.toString())
+                    .data("llmUsageStats", totalStats)
                     .durationMillis(duration)
                     .error(e)
             );
@@ -255,6 +292,7 @@ public class SemanticTreeManager {
             hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_ERROR,
                 HookContext.builder(HookType.DOCUMENT_UPLOAD_ERROR)
                     .data("filePath", filePath.toString())
+                    .data("llmUsageStats", totalStats)
                     .durationMillis(duration)
                     .error(e)
             );
@@ -300,66 +338,30 @@ public class SemanticTreeManager {
         return CompletableFuture.runAsync(() -> addDocument(filePath));
     }
 
-    public void addDocuments(List<Path> filePaths) {
-        try {
-            List<Document> documents = prepareDocuments(filePaths);
-            
-            if (documents.isEmpty()) {
-                logger.info("没有新文档需要处理");
-                return;
-            }
-            
-            DocumentProcessingResult processingResult = processDocuments(documents);
-            updateSemanticTreeFromDocuments(processingResult.comprehendResultMap(), processingResult.chunkMap());
-
-            logger.debug("批量添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
-            
-            try {
-                saveTree();
-            } catch (IOException e) {
-                throw new StorageException(treeFilePath, "saveTree", e);
-            }
-        } catch (StorageException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new StorageException(storagePath.toString(), "addDocuments", e);
-        }
-    }
-    
-    private List<Document> prepareDocuments(List<Path> filePaths) {
-        List<Document> documents = new ArrayList<>();
-        long baseTimestamp = System.currentTimeMillis();
-        int docIndex = 0;
+    /**
+     * 批量添加文档
+     *
+     * @param filePaths 文件路径列表
+     * @return 每个文档的上传结果列表，包含 LLM 调用统计
+     */
+    public List<DocumentUploadResult> addDocuments(List<Path> filePaths) {
+        List<DocumentUploadResult> results = new ArrayList<>();
         
         for (Path filePath : filePaths) {
             try {
-                String md5 = MD5Util.calculateMD5(filePath);
-                
-                if (isDocumentAlreadyExists(md5)) {
-                    logger.debug("文件 {} 已存在（MD5: {}），跳过处理", filePath, md5);
-                    docIndex++;
-                    continue;
-                }
-                
-                Path copiedFile = createDocumentCopy(filePath);
-                String fileName = FileUtils.getFileName(filePath);
-                String docId = "doc_" + baseTimestamp + "_" + docIndex;
-                docIndex++;
-                
-                Document document = Document.fromFile(docId, fileName, copiedFile.toString(), md5,
-                    Map.of("original_file", filePath.toString()));
-                
-                documents.add(document);
-            } catch (IOException e) {
+                DocumentUploadResult result = addDocument(filePath);
+                results.add(result);
+            } catch (Exception e) {
                 logger.error("处理文件 {} 失败: {}", filePath, e.getMessage());
+                results.add(DocumentUploadResult.failure(null, "处理失败: " + e.getMessage()));
             }
         }
         
-        return documents;
+        return results;
     }
 
-    public CompletableFuture<Void> addDocumentsAsync(List<Path> filePaths) {
-        return CompletableFuture.runAsync(() -> addDocuments(filePaths));
+    public CompletableFuture<List<DocumentUploadResult>> addDocumentsAsync(List<Path> filePaths) {
+        return CompletableFuture.supplyAsync(() -> addDocuments(filePaths));
     }
 
     private Path createDocumentCopy(Path originalFile) {
@@ -372,18 +374,28 @@ public class SemanticTreeManager {
         }
     }
     
-    private void updateSemanticTreeFromDocuments(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
-        this.semanticTree = buildTreeInternal(comprehendResultMap, chunkMap);
+    private TreeBuilder.TreeBuildResult updateSemanticTreeFromDocuments(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
+        TreeBuilder.TreeBuildResult result = buildTreeInternal(comprehendResultMap, chunkMap);
+        this.semanticTree = result.tree();
         updateNavigators();
+        return result;
     }
     
     private void updateNavigators() {
         this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
         this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore, hookExecutor);
     }
-    
+
+    /**
+     * 执行导航查询
+     *
+     * @param query 查询字符串
+     * @return 导航结果，包含 LLM 调用统计数据
+     */
     public NavigationResult navigate(String query) {
         long startTime = System.currentTimeMillis();
+        LLMUsageStats stats = new LLMUsageStats();
+        
         hookExecutor.executeHooks(HookType.NAVIGATION_START,
             HookContext.builder(HookType.NAVIGATION_START)
                 .data("query", query)
@@ -405,11 +417,14 @@ public class SemanticTreeManager {
                     "No navigator available");
             }
             
+            stats.merge(result.llmUsageStats());
+            
             long duration = System.currentTimeMillis() - startTime;
             hookExecutor.executeHooks(HookType.NAVIGATION_END,
                 HookContext.builder(HookType.NAVIGATION_END)
                     .data("query", query)
                     .data("resultCount", result.documents().size())
+                    .data("llmUsageStats", stats)
                     .durationMillis(duration)
             );
             
@@ -419,6 +434,7 @@ public class SemanticTreeManager {
             hookExecutor.executeHooks(HookType.NAVIGATION_ERROR,
                 HookContext.builder(HookType.NAVIGATION_ERROR)
                     .data("query", query)
+                    .data("llmUsageStats", stats)
                     .durationMillis(duration)
                     .error(e)
             );
@@ -430,6 +446,7 @@ public class SemanticTreeManager {
             hookExecutor.executeHooks(HookType.NAVIGATION_ERROR,
                 HookContext.builder(HookType.NAVIGATION_ERROR)
                     .data("query", query)
+                    .data("llmUsageStats", stats)
                     .durationMillis(duration)
                     .error(navException)
             );

@@ -3,6 +3,7 @@ package cn.nexon.zerovector.core.tree;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
+import cn.nexon.zerovector.core.ai.LLMUsageStats;
 import cn.nexon.zerovector.core.hook.HookContext;
 import cn.nexon.zerovector.core.hook.HookExecutor;
 import cn.nexon.zerovector.core.hook.HookType;
@@ -13,12 +14,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
+/**
+ * 语义树导航器
+ * 负责在语义树中进行导航搜索
+ */
 public class Navigator {
     private static final Logger logger = LoggerFactory.getLogger(Navigator.class);
     private static final int MAX_NAVIGATION_HISTORY = 100;
@@ -53,6 +57,9 @@ public class Navigator {
     
     /**
      * 执行查询导航
+     *
+     * @param query 查询字符串
+     * @return 导航结果，包含 LLM 调用统计数据
      */
     public NavigationResult navigate(String query) {
         NavigationPath path = new NavigationPath(
@@ -62,18 +69,19 @@ public class Navigator {
         );
         addNavigationPath(path);
         
-        return navigateRecursive(query, currentNode, 0);
+        return navigateRecursive(query, currentNode, 0, new LLMUsageStats());
     }
     
     /**
      * 递归导航逻辑
      */
-    private NavigationResult navigateRecursive(String query, TreeNode node, int depth) {
+    private NavigationResult navigateRecursive(String query, TreeNode node, int depth, LLMUsageStats stats) {
         if (depth > 10) {
             return new NavigationResult(
                 List.of(),
                 "Navigation depth exceeded",
-                navigationHistory
+                navigationHistory,
+                stats
             );
         }
         
@@ -82,7 +90,8 @@ public class Navigator {
             return new NavigationResult(
                 chunks,
                 "Found relevant documents at leaf node",
-                navigationHistory
+                navigationHistory,
+                stats
             );
         }
         
@@ -102,6 +111,8 @@ public class Navigator {
         );
         
         LLMResponse response = llmService.decideNavigation(navigationPrompt);
+        stats.add(response);
+        
         NavigationAction action = parseNavigationResponse(response.content(), childNodes);
         
         return switch (action) {
@@ -111,7 +122,8 @@ public class Navigator {
                     yield new NavigationResult(
                         List.of(),
                         "Invalid node selected: " + nodeId,
-                        navigationHistory
+                        navigationHistory,
+                        stats
                     );
                 }
                 
@@ -125,7 +137,7 @@ public class Navigator {
                     reasoning
                 ));
                 
-                yield navigateRecursive(query, nextNode, depth + 1);
+                yield navigateRecursive(query, nextNode, depth + 1, stats);
             }
             
             case NavigationAction.SelectLeaves(List<String> chunkIds, String reasoning) -> {
@@ -133,7 +145,8 @@ public class Navigator {
                 yield new NavigationResult(
                     chunks,
                     reasoning,
-                    navigationHistory
+                    navigationHistory,
+                    stats
                 );
             }
             
@@ -149,7 +162,8 @@ public class Navigator {
                 yield new NavigationResult(
                     allChunks,
                     reasoning,
-                    navigationHistory
+                    navigationHistory,
+                    stats
                 );
             }
             
@@ -157,14 +171,16 @@ public class Navigator {
                 yield new NavigationResult(
                     List.of(),
                     reason,
-                    navigationHistory
+                    navigationHistory,
+                    stats
                 );
             }
             
             case NavigationAction.Stop(String reasoning) -> new NavigationResult(
                 List.of(),
                 reasoning,
-                navigationHistory
+                navigationHistory,
+                stats
             );
         };
     }

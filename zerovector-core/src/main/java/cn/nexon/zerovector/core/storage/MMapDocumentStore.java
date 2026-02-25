@@ -3,7 +3,6 @@ package cn.nexon.zerovector.core.storage;
 import cn.nexon.zerovector.core.exception.CacheException;
 import cn.nexon.zerovector.core.exception.StorageException;
 import cn.nexon.zerovector.core.model.DocumentChunk;
-import cn.nexon.zerovector.core.util.PerformanceMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,13 +15,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+/**
+ * 基于 MMap 的文档存储
+ * 使用内存映射文件实现高效的文档块存储
+ */
 public class MMapDocumentStore implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(MMapDocumentStore.class);
     private static final int INITIAL_BUFFER_SIZE = 1024 * 1024;
@@ -71,22 +73,22 @@ public class MMapDocumentStore implements AutoCloseable {
         }
     }
     
+    /**
+     * 添加文档块
+     *
+     * @param chunkId 文档块 ID
+     * @param content 文档块内容
+     * @return 文件位置信息
+     */
     public FileLocation addChunk(String chunkId, String content) throws IOException {
-        PerformanceMonitor writeMonitor = new PerformanceMonitor("MMapDocumentStore.addChunk");
-        writeMonitor.start();
-        
         lock.writeLock().lock();
         try {
             byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
             MappedByteBuffer currentBuffer = buffer();
             
             if (currentBuffer.position() + 4 + contentBytes.length > currentBuffer.capacity()) {
-                PerformanceMonitor expandMonitor = new PerformanceMonitor("MMapDocumentStore.expandBuffer");
-                expandMonitor.start();
                 expandBuffer(currentBuffer.capacity() * 2);
-                expandMonitor.stop();
-                logger.debug("缓冲区扩展耗时: {}ms, 新大小: {}MB", 
-                        expandMonitor.getDurationMillis(), (currentBuffer.capacity() * 2) / (1024 * 1024));
+                logger.debug("缓冲区扩展, 新大小: {}MB", (currentBuffer.capacity() * 2) / (1024 * 1024));
                 currentBuffer = buffer();
             }
             
@@ -99,9 +101,7 @@ public class MMapDocumentStore implements AutoCloseable {
             FileLocation location = new FileLocation(offset, length);
             index.put(chunkId, location);
             
-            writeMonitor.stop();
-            logger.debug("文档块写入耗时: {}ms, chunkId: {}, 大小: {} bytes", 
-                    writeMonitor.getDurationMillis(), chunkId, length);
+            logger.debug("文档块写入完成, chunkId: {}, 大小: {} bytes", chunkId, length);
             
             return location;
         } catch (Exception e) {
@@ -112,10 +112,13 @@ public class MMapDocumentStore implements AutoCloseable {
         }
     }
     
+    /**
+     * 获取文档块内容
+     *
+     * @param chunkId 文档块 ID
+     * @return 文档块内容
+     */
     public String getChunk(String chunkId) {
-        PerformanceMonitor readMonitor = new PerformanceMonitor("MMapDocumentStore.getChunk");
-        readMonitor.start();
-        
         lock.readLock().lock();
         try {
             FileLocation loc = index.get(chunkId);
@@ -132,9 +135,7 @@ public class MMapDocumentStore implements AutoCloseable {
             byte[] bytes = new byte[length];
             sliceBuffer.get(bytes);
             
-            readMonitor.stop();
-            logger.debug("文档块读取耗时: {}ms, chunkId: {}, 大小: {} bytes", 
-                    readMonitor.getDurationMillis(), chunkId, length);
+            logger.debug("文档块读取完成, chunkId: {}, 大小: {} bytes", chunkId, length);
             
             return new String(bytes, StandardCharsets.UTF_8);
         } catch (Exception e) {
@@ -145,6 +146,13 @@ public class MMapDocumentStore implements AutoCloseable {
         }
     }
     
+    /**
+     * 获取文档块内容
+     * 根据文档块类型选择读取方式
+     *
+     * @param chunk 文档块
+     * @return 文档块内容
+     */
     public String getChunkContent(DocumentChunk chunk) {
         if (chunk.isFilePathBased()) {
             try {
