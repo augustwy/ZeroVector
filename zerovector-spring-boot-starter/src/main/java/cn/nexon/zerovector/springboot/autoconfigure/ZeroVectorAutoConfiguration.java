@@ -56,7 +56,7 @@ public class ZeroVectorAutoConfiguration {
         @ConditionalOnMissingBean(LLMProvider.class)
         LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
             if (!config.getCache().isEnabled()) {
-                logger.info("LLM缓存已禁用");
+                logger.debug("LLM缓存已禁用");
                 return delegate;
             }
             
@@ -76,7 +76,7 @@ public class ZeroVectorAutoConfiguration {
             cacheConfigs.put(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, 
                 toCacheConfig(config.getCache().getDecideNavigation()));
             
-            logger.info("LLM缓存已启用，配置: {}", config.getCache());
+            logger.debug("LLM缓存已启用，配置: {}", config.getCache());
             return new CachedLLMProvider(delegate, cacheConfigs);
         }
         
@@ -101,7 +101,7 @@ public class ZeroVectorAutoConfiguration {
         @ConditionalOnMissingBean(LLMProvider.class)
         LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
             if (!config.getCache().isEnabled()) {
-                logger.info("LLM缓存已禁用");
+                logger.debug("LLM缓存已禁用");
                 return delegate;
             }
             
@@ -121,7 +121,7 @@ public class ZeroVectorAutoConfiguration {
             cacheConfigs.put(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, 
                 toCacheConfig(config.getCache().getDecideNavigation()));
             
-            logger.info("LLM缓存已启用，配置: {}", config.getCache());
+            logger.debug("LLM缓存已启用，配置: {}", config.getCache());
             return new CachedLLMProvider(delegate, cacheConfigs);
         }
         
@@ -152,7 +152,6 @@ public class ZeroVectorAutoConfiguration {
         if (hookConfig.isEnabled()) {
             hooksProvider.forEach(hook -> {
                 hookRegistry.register(hook);
-                logger.info("已注册自定义钩子: {}", hook.getName());
             });
             
             List<String> hooks = hookConfig.getHooks();
@@ -163,7 +162,6 @@ public class ZeroVectorAutoConfiguration {
                         if (LifecycleHook.class.isAssignableFrom(hookClass)) {
                             LifecycleHook hook = (LifecycleHook) hookClass.getDeclaredConstructor().newInstance();
                             hookRegistry.register(hook);
-                            logger.info("已通过配置注册钩子: {}", hook.getName());
                         } else {
                             logger.warn("类 {} 不是 LifecycleHook 的实现类，跳过", hookClassName);
                         }
@@ -197,7 +195,7 @@ public class ZeroVectorAutoConfiguration {
     @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
     KnowledgeBaseManager knowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
                                               ZeroVectorProperties properties, HookExecutor hookExecutor) {
-        logger.info("创建知识库管理器，基础存储路径: {}", properties.getStorageBasePath());
+        logger.debug("创建知识库管理器，基础存储路径: {}", properties.getStorageBasePath());
         
         KnowledgeBaseManager manager = new KnowledgeBaseManager(
             llmProvider, 
@@ -209,7 +207,6 @@ public class ZeroVectorAutoConfiguration {
         
         try {
             manager.initialize();
-            logger.info("知识库管理器初始化完成");
             return manager;
         } catch (Exception e) {
             logger.error("知识库管理器初始化失败", e);

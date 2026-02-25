@@ -81,7 +81,7 @@ public class CachedLLMProvider implements LLMProvider {
         
         if (stats != null) stats.recordMiss();
         
-        LLMResponse similarResult = findSimilarCachedResult(type, prompt);
+        LLMResponse similarResult = findSimilarCachedResult(type, prompt, cacheKey);
         if (similarResult != null) {
             cache.put(cacheKey, similarResult);
             if (stats != null) stats.recordHit();
@@ -110,7 +110,7 @@ public class CachedLLMProvider implements LLMProvider {
         }
     }
     
-    private LLMResponse findSimilarCachedResult(SmartCacheStrategy.RequestType type, String prompt) {
+    private LLMResponse findSimilarCachedResult(SmartCacheStrategy.RequestType type, String prompt, String cacheKey) {
         Cache<String, LLMResponse> cache = caches.get(type);
         if (cache == null) return null;
         
@@ -175,7 +175,7 @@ public class CachedLLMProvider implements LLMProvider {
         caches.values().forEach(Cache::invalidateAll);
         similarPromptCache.clear();
         statistics.values().forEach(CacheStatistics::reset);
-        logger.info("All caches cleared");
+        logger.debug("All caches cleared");
     }
     
     public void clearCache(SmartCacheStrategy.RequestType type) {
@@ -187,7 +187,7 @@ public class CachedLLMProvider implements LLMProvider {
         if (statistics.containsKey(type)) {
             statistics.get(type).reset();
         }
-        logger.info("Cache cleared for type: {}", type);
+        logger.debug("Cache cleared for type: {}", type);
     }
     
     public Map<SmartCacheStrategy.RequestType, CacheStatistics> getStatistics() {
@@ -199,12 +199,12 @@ public class CachedLLMProvider implements LLMProvider {
     }
     
     public void warmupCache(Map<SmartCacheStrategy.RequestType, List<String>> warmupPrompts) {
-        logger.info("Starting cache warmup with {} request types", warmupPrompts.size());
+        logger.debug("Starting cache warmup with {} request types", warmupPrompts.size());
         
         warmupPrompts.forEach((type, prompts) -> {
             if (prompts == null || prompts.isEmpty()) return;
             
-            logger.info("Warming up cache for type: {} with {} prompts", type, prompts.size());
+            logger.debug("Warming up cache for type: {} with {} prompts", type, prompts.size());
             Cache<String, LLMResponse> cache = caches.get(type);
             if (cache == null) return;
             
@@ -234,11 +234,11 @@ public class CachedLLMProvider implements LLMProvider {
                 }
             }
             
-            logger.info("Cache warmup completed for type: {} - Success: {}, Failed: {}", 
+            logger.debug("Cache warmup completed for type: {} - Success: {}, Failed: {}", 
                 type, successCount, failureCount);
         });
         
-        logger.info("Cache warmup completed");
+        logger.debug("Cache warmup completed");
     }
     
     public void updateCacheConfig(SmartCacheStrategy.RequestType type, CacheConfig config) {
@@ -262,7 +262,7 @@ public class CachedLLMProvider implements LLMProvider {
             caches.remove(type);
             similarPromptCache.keySet().removeIf(key -> key.startsWith(type.name().toLowerCase()));
         }
-        logger.info("Cache config updated for type: {}", type);
+        logger.debug("Cache config updated for type: {}", type);
     }
     
     public long getTotalCacheSize() {
@@ -276,7 +276,7 @@ public class CachedLLMProvider implements LLMProvider {
     
     public void logStatistics() {
         statistics.forEach((type, stats) -> {
-            logger.info("{}", stats);
+            logger.debug("{}", stats);
         });
     }
 }

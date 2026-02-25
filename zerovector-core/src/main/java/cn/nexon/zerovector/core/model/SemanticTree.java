@@ -48,7 +48,7 @@ public record SemanticTree(
         try {
             String json = objectMapper.writeValueAsString(this);
             Files.writeString(Paths.get(filePath), json);
-            logger.info("语义树已保存到: {}", filePath);
+            logger.debug("语义树已保存到: {}", filePath);
         } catch (JsonProcessingException e) {
             throw new IOException("序列化语义树失败", e);
         }

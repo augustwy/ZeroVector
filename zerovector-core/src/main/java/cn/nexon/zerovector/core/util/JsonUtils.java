@@ -1,6 +1,7 @@
 package cn.nexon.zerovector.core.util;
 
 import cn.nexon.zerovector.core.exception.PromptLoadException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
@@ -35,8 +36,7 @@ public class JsonUtils {
     
     public static List<String> parseStringList(String json) {
         try {
-            StringListResponse result = OBJECT_MAPPER.readValue(json, StringListResponse.class);
-            return result.items();
+            return OBJECT_MAPPER.readValue(json, new TypeReference<List<String>>() {});
         } catch (Exception e) {
             throw new PromptLoadException("parseStringList", PromptLoadException.ERROR_CODE_PARSE_FAILED, 
                 "Failed to parse string list response", e);
@@ -60,6 +60,4 @@ public class JsonUtils {
                 "Failed to serialize object to JSON", e);
         }
     }
-    
-    private record StringListResponse(List<String> items) {}
 }

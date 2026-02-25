@@ -20,10 +20,12 @@ zerovector:
   concurrency:
     max-concurrent-requests: 1
     requests-per-second: 1
+  hook:
+    enabled: true
+    hooks:
+      - cn.nexon.zerovector.core.hook.LoggingLifecycleHook
 
 # 日志配置
 logging:
   level:
-    cn.nexon.zerovector: DEBUG
-    org.springframework.beans.factory: INFO
-    org.springframework.boot.autoconfigure: INFO
+    cn.nexon.zerovector: INFO

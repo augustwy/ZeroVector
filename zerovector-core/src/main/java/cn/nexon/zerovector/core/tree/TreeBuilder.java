@@ -30,17 +30,17 @@ public class TreeBuilder {
     private static final Logger logger = LoggerFactory.getLogger(TreeBuilder.class);
     private static final int CLUSTERING_THRESHOLD = 5;
     
-    private final LLMProvider llm;
+    private final LLMProvider llmProvider;
     private final KeywordDictionary dictionary;
     private final MMapDocumentStore store;
     private final HookExecutor hookExecutor;
 
-    public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
-        this(llm, dictionary, store, concurrencyConfig, new DefaultHookExecutor());
+    public TreeBuilder(LLMProvider llmProvider, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
+        this(llmProvider, dictionary, store, concurrencyConfig, new DefaultHookExecutor());
     }
 
-    public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig, HookExecutor hookExecutor) {
-        this.llm = llm;
+    public TreeBuilder(LLMProvider llmProvider, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig, HookExecutor hookExecutor) {
+        this.llmProvider = llmProvider;
         this.dictionary = dictionary;
         this.store = store;
         this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
@@ -292,7 +292,7 @@ public class TreeBuilder {
             .toList();
         
         String clusterPrompt = LLMPromptTemplates.clusterDocumentChunks(summaries);
-        LLMResponse response = llm.clusterDocuments(clusterPrompt);
+        LLMResponse response = llmProvider.clusterDocuments(clusterPrompt);
         stats.add(response);
         
         logger.debug("聚类操作完成");
@@ -375,9 +375,9 @@ public class TreeBuilder {
         String entitiesPrompt = LLMPromptTemplates.extractEntities(summariesText);
         String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
         
-        LLMResponse keywordsResponse = llm.extractKeywords(keywordsPrompt);
-        LLMResponse entitiesResponse = llm.extractEntities(entitiesPrompt);
-        LLMResponse examplesResponse = llm.generateExampleQuestions(examplesPrompt);
+        LLMResponse keywordsResponse = llmProvider.extractKeywords(keywordsPrompt);
+        LLMResponse entitiesResponse = llmProvider.extractEntities(entitiesPrompt);
+        LLMResponse examplesResponse = llmProvider.generateExampleQuestions(examplesPrompt);
         
         stats.add(keywordsResponse);
         stats.add(entitiesResponse);

@@ -5,61 +5,43 @@ public class CacheException extends RuntimeException {
     private final String operation;
     private final String errorCode;
     private final ErrorLevel errorLevel;
-    
-    public CacheException(String cacheKey, String operation, String errorCode, String message, Throwable cause) {
-        super(String.format("[%s][%s] Cache operation '%s' failed for key '%s': %s", errorCode, ErrorLevel.ERROR, operation, cacheKey, message), cause);
-        this.cacheKey = cacheKey;
-        this.operation = operation;
-        this.errorCode = errorCode;
-        this.errorLevel = ErrorLevel.ERROR;
-    }
-    
-    public CacheException(String cacheKey, String operation, String errorCode, String message) {
-        super(String.format("[%s][%s] Cache operation '%s' failed for key '%s': %s", errorCode, ErrorLevel.ERROR, operation, cacheKey, message));
-        this.cacheKey = cacheKey;
-        this.operation = operation;
-        this.errorCode = errorCode;
-        this.errorLevel = ErrorLevel.ERROR;
-    }
-    
-    public CacheException(String cacheKey, String operation, String errorCode, ErrorLevel errorLevel, String message) {
-        super(String.format("[%s][%s] Cache operation '%s' failed for key '%s': %s", errorCode, errorLevel, operation, cacheKey, message));
-        this.cacheKey = cacheKey;
-        this.operation = operation;
-        this.errorCode = errorCode;
-        this.errorLevel = errorLevel;
-    }
-    
+
     public CacheException(String cacheKey, String operation, String errorCode, ErrorLevel errorLevel, String message, Throwable cause) {
         super(String.format("[%s][%s] Cache operation '%s' failed for key '%s': %s", errorCode, errorLevel, operation, cacheKey, message), cause);
         this.cacheKey = cacheKey;
         this.operation = operation;
         this.errorCode = errorCode;
-        this.errorLevel = errorLevel;
+        this.errorLevel = errorLevel != null ? errorLevel : ErrorLevel.ERROR;
     }
-    
+
+    public CacheException(String cacheKey, String operation, String errorCode, ErrorLevel errorLevel, String message) {
+        this(cacheKey, operation, errorCode, errorLevel, message, null);
+    }
+
+    public CacheException(String cacheKey, String operation, String errorCode, String message, Throwable cause) {
+        this(cacheKey, operation, errorCode, ErrorLevel.ERROR, message, cause);
+    }
+
+    public CacheException(String cacheKey, String operation, String errorCode, String message) {
+        this(cacheKey, operation, errorCode, ErrorLevel.ERROR, message, null);
+    }
+
     public String getCacheKey() {
         return cacheKey;
     }
-    
+
     public String getOperation() {
         return operation;
     }
-    
+
     public String getErrorCode() {
         return errorCode;
     }
-    
+
     public ErrorLevel getErrorLevel() {
         return errorLevel;
     }
-    
-    public enum ErrorLevel {
-        WARNING,
-        ERROR,
-        CRITICAL
-    }
-    
+
     public static final String ERROR_CODE_KEY_NOT_FOUND = "CACHE_001";
     public static final String ERROR_CODE_PUT_FAILED = "CACHE_002";
     public static final String ERROR_CODE_GET_FAILED = "CACHE_003";

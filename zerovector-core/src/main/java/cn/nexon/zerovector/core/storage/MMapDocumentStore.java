@@ -223,7 +223,7 @@ public class MMapDocumentStore implements AutoCloseable {
                 }
             }
             
-            logger.info("已加载 {} 个文档块索引", index.size());
+            logger.debug("已加载 {} 个文档块索引", index.size());
         } catch (IOException e) {
             throw new StorageException(indexFilePath, "loadIndex", e);
         } catch (Exception e) {

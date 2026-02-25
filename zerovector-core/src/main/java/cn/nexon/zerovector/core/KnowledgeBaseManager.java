@@ -54,7 +54,7 @@ public class KnowledgeBaseManager {
             return;
         }
 
-        logger.info("开始初始化知识库管理器，基础存储路径: {}", baseStoragePath.toAbsolutePath());
+        logger.debug("开始初始化知识库管理器，基础存储路径: {}", baseStoragePath.toAbsolutePath());
 
         try {
             Files.createDirectories(baseStoragePath);
@@ -69,7 +69,7 @@ public class KnowledgeBaseManager {
         }
 
         if (!managers.containsKey(DEFAULT_KNOWLEDGE_BASE)) {
-            logger.info("默认知识库不存在，正在创建: {}", DEFAULT_KNOWLEDGE_BASE);
+            logger.debug("默认知识库不存在，正在创建: {}", DEFAULT_KNOWLEDGE_BASE);
             try {
                 createKnowledgeBase(DEFAULT_KNOWLEDGE_BASE);
             } catch (IOException e) {
@@ -77,7 +77,7 @@ public class KnowledgeBaseManager {
                 throw e;
             }
         } else {
-            logger.info("默认知识库已存在: {}", DEFAULT_KNOWLEDGE_BASE);
+            logger.debug("默认知识库已存在: {}", DEFAULT_KNOWLEDGE_BASE);
         }
 
         currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
@@ -88,7 +88,7 @@ public class KnowledgeBaseManager {
 
     private void loadExistingKnowledgeBases() throws IOException {
         if (!Files.exists(baseStoragePath)) {
-            logger.info("基础存储路径不存在: {}", baseStoragePath);
+            logger.debug("基础存储路径不存在: {}", baseStoragePath);
             return;
         }
 
@@ -102,7 +102,7 @@ public class KnowledgeBaseManager {
                 .filter(Files::isDirectory)
                 .toList();
 
-            logger.info("发现 {} 个潜在的知识库目录", kbDirectories.size());
+            logger.debug("发现 {} 个潜在的知识库目录", kbDirectories.size());
 
             int loadedCount = 0;
             for (Path kbDir : kbDirectories) {
@@ -117,14 +117,14 @@ public class KnowledgeBaseManager {
                 }
             }
 
-            logger.info("成功加载 {} 个已存在的知识库", loadedCount);
+            logger.debug("成功加载 {} 个已存在的知识库", loadedCount);
         } catch (IOException e) {
             throw new StorageException(baseStoragePath.toString(), "loadExistingKnowledgeBases", e);
         }
     }
 
     private void loadKnowledgeBase(String name, Path storagePath) throws IOException {
-        logger.info("加载知识库: {}, 存储路径: {}", name, storagePath);
+        logger.debug("加载知识库: {}, 存储路径: {}", name, storagePath);
 
         if (!isValidKnowledgeBaseDirectory(storagePath)) {
             logger.warn("知识库目录 {} 不是有效的知识库目录，跳过加载", storagePath);
@@ -287,7 +287,7 @@ public class KnowledgeBaseManager {
         String oldName = currentKnowledgeBase;
         currentKnowledgeBase = name;
 
-        logger.info("切换知识库: {} -> {}", oldName, name);
+        logger.debug("切换知识库: {} -> {}", oldName, name);
     }
 
     public List<String> listKnowledgeBases() {

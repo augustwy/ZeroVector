@@ -87,7 +87,7 @@ public class SemanticTreeManager {
             
             if (!Files.exists(storagePathObj)) {
                 Files.createDirectories(storagePathObj);
-                logger.info("创建存储目录: {}", storagePath);
+                logger.debug("创建存储目录: {}", storagePath);
             }
             
             String documentStoreFilePath = this.fileBasePath + ".data";
@@ -108,7 +108,7 @@ public class SemanticTreeManager {
             try {
                 KeywordDictionary loadedDict = KeywordDictionary.loadFromFile(dictionaryFilePath);
                 this.keywordDictionary = loadedDict;
-                logger.info("已加载已保存的关键词字典");
+                logger.debug("已加载已保存的关键词字典");
             } catch (IOException e) {
                 logger.warn("加载关键词字典失败，将使用新字典: {}", e.getMessage());
             }
@@ -116,7 +116,7 @@ public class SemanticTreeManager {
             if (this.semanticTree != null) {
                 this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
                 this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore, hookExecutor);
-                logger.info("已加载已保存的语义树");
+                logger.debug("已加载已保存的语义树");
             }
         } catch (IOException e) {
             throw new StorageException(storagePath.toString(), "initialize", e);

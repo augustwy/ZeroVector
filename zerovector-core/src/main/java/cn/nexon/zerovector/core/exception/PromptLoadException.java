@@ -4,53 +4,38 @@ public class PromptLoadException extends RuntimeException {
     private final String promptName;
     private final String errorCode;
     private final ErrorLevel errorLevel;
-    
-    public PromptLoadException(String promptName, String errorCode, String message, Throwable cause) {
-        super(String.format("[%s][%s] Failed to load prompt '%s': %s", errorCode, ErrorLevel.ERROR, promptName, message), cause);
-        this.promptName = promptName;
-        this.errorCode = errorCode;
-        this.errorLevel = ErrorLevel.ERROR;
-    }
-    
-    public PromptLoadException(String promptName, String errorCode, String message) {
-        super(String.format("[%s][%s] Failed to load prompt '%s': %s", errorCode, ErrorLevel.ERROR, promptName, message));
-        this.promptName = promptName;
-        this.errorCode = errorCode;
-        this.errorLevel = ErrorLevel.ERROR;
-    }
-    
-    public PromptLoadException(String promptName, String errorCode, ErrorLevel errorLevel, String message) {
-        super(String.format("[%s][%s] Failed to load prompt '%s': %s", errorCode, errorLevel, promptName, message));
-        this.promptName = promptName;
-        this.errorCode = errorCode;
-        this.errorLevel = errorLevel;
-    }
-    
+
     public PromptLoadException(String promptName, String errorCode, ErrorLevel errorLevel, String message, Throwable cause) {
         super(String.format("[%s][%s] Failed to load prompt '%s': %s", errorCode, errorLevel, promptName, message), cause);
         this.promptName = promptName;
         this.errorCode = errorCode;
-        this.errorLevel = errorLevel;
+        this.errorLevel = errorLevel != null ? errorLevel : ErrorLevel.ERROR;
     }
-    
+
+    public PromptLoadException(String promptName, String errorCode, String message, Throwable cause) {
+        this(promptName, errorCode, ErrorLevel.ERROR, message, cause);
+    }
+
+    public PromptLoadException(String promptName, String errorCode, ErrorLevel errorLevel, String message) {
+        this(promptName, errorCode, errorLevel, message, null);
+    }
+
+    public PromptLoadException(String promptName, String errorCode, String message) {
+        this(promptName, errorCode, ErrorLevel.ERROR, message, null);
+    }
+
     public String getPromptName() {
         return promptName;
     }
-    
+
     public String getErrorCode() {
         return errorCode;
     }
-    
+
     public ErrorLevel getErrorLevel() {
         return errorLevel;
     }
-    
-    public enum ErrorLevel {
-        WARNING,
-        ERROR,
-        CRITICAL
-    }
-    
+
     public static final String ERROR_CODE_FILE_NOT_FOUND = "PROMPT_001";
     public static final String ERROR_CODE_PARSE_FAILED = "PROMPT_002";
     public static final String ERROR_CODE_INVALID_FORMAT = "PROMPT_003";

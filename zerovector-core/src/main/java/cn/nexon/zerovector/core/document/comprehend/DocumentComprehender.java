@@ -107,16 +107,16 @@ public class DocumentComprehender {
             return DocumentComprehendResult.of("", List.of());
         }
 
-        logger.info("开始理解文档: {}, 大小: {} bytes", document.title(), fileSize);
+        logger.debug("开始理解文档: {}, 大小: {} bytes", document.title(), fileSize);
 
         if (fileSize < MMAP_THRESHOLD) {
             DocumentComprehendResult result = comprehendSmallFile(filePath, document, stats);
-            logger.info("文件文档理解完成");
+            logger.debug("文件文档理解完成");
             return result;
         }
 
         DocumentComprehendResult result = comprehendLargeFile(filePath, document, fileSize, stats);
-        logger.info("大文件文档理解完成");
+        logger.debug("大文件文档理解完成");
         return result;
     }
     
@@ -158,7 +158,7 @@ public class DocumentComprehender {
 
             String finalSummary = generateFinalSummary(document.title(), accumulatedSummary.toString(), stats);
 
-            logger.info("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
+            logger.debug("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
 
             return new DocumentComprehendResult(
                     finalSummary,
@@ -253,7 +253,7 @@ public class DocumentComprehender {
     }
 
     private DocumentComprehendResult processContent(String content, Document document, LLMUsageStats stats) {
-        logger.info("开始理解文档: {}, 大小: {} chars", document.title(), content.length());
+        logger.debug("开始理解文档: {}, 大小: {} chars", document.title(), content.length());
 
         List<cn.nexon.zerovector.core.model.KeywordDefinition> allKeywordDefinitions = new ArrayList<>();
         List<String> allEntities = new ArrayList<>();
@@ -288,7 +288,7 @@ public class DocumentComprehender {
 
         String finalSummary = generateFinalSummary(document.title(), accumulatedSummary.toString(), stats);
 
-        logger.debug("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
+        logger.info("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
 
         return new DocumentComprehendResult(
                 finalSummary,

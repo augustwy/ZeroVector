@@ -1,12 +1,12 @@
 package cn.nexon.zerovector.core.ai;
 
-import java.security.MessageDigest;
-import java.util.HexFormat;
-import java.util.function.Function;
+import java.util.Objects;
 
 public class SmartCacheStrategy {
     
     private static final double SIMILARITY_THRESHOLD = 0.85;
+    private static final int MAX_SIMILARITY_LENGTH = 500;
+    private static final boolean ENABLE_SIMILARITY_MATCHING = true;
     
     public enum RequestType {
         COMPREHEND_CHUNK,
@@ -27,16 +27,17 @@ public class SmartCacheStrategy {
     }
     
     private static String hashPrompt(String prompt) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(prompt.getBytes("UTF-8"));
-            return HexFormat.of().formatHex(hash).substring(0, 16);
-        } catch (Exception e) {
-            return String.valueOf(prompt.hashCode());
+        if (prompt == null) {
+            return "null";
         }
+        return String.valueOf(Objects.hash(prompt));
     }
     
     public static boolean isSimilarPrompt(String prompt1, String prompt2) {
+        if (!ENABLE_SIMILARITY_MATCHING) {
+            return false;
+        }
+        
         if (prompt1 == null || prompt2 == null) {
             return false;
         }
@@ -46,6 +47,10 @@ public class SmartCacheStrategy {
         
         if (normalized1.equals(normalized2)) {
             return true;
+        }
+        
+        if (normalized1.length() > MAX_SIMILARITY_LENGTH || normalized2.length() > MAX_SIMILARITY_LENGTH) {
+            return false;
         }
         
         return calculateSimilarity(normalized1, normalized2) >= SIMILARITY_THRESHOLD;

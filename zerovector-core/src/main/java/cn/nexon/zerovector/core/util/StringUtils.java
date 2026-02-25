@@ -18,6 +18,9 @@ public class StringUtils {
         if (str == null) {
             return null;
         }
+        if (maxLength <= 0) {
+            return "";
+        }
         return str.substring(0, Math.min(maxLength, str.length()));
     }
     
@@ -26,23 +29,5 @@ public class StringUtils {
             return "";
         }
         return String.join(" ", items);
-    }
-    
-    public static String joinWithDelimiter(List<String> items, String delimiter) {
-        if (items == null || items.isEmpty()) {
-            return "";
-        }
-        return String.join(delimiter, items);
-    }
-    
-    public static String safeToString(Object obj) {
-        return obj == null ? "" : obj.toString();
-    }
-    
-    public static String removeExtraWhitespace(String str) {
-        if (str == null) {
-            return null;
-        }
-        return str.trim().replaceAll("\\s+", " ");
     }
 }
