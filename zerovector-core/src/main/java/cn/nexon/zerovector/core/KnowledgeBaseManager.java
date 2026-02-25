@@ -54,6 +54,17 @@ public class KnowledgeBaseManager {
             return;
         }
 
+        System.out.println("");
+        System.out.println(" ________   _______ .______        ______      ____    ____  _______   ______ .___________.  ______   .______   ");
+        System.out.println("|       /  |   ____||   _  \\      /  __  \\     \\   \\  /   / |   ____| /      ||           | /  __  \\  |   _  \\ ");
+        System.out.println("`---/  /   |  |__   |  |_)  |    |  |  |  |     \\   \\/   /  |  |__   |  ,----'`---|  |----`|  |  |  | |  |_)  |");
+        System.out.println("   /  /    |   __|  |      /     |  |  |  |      \\      /   |   __|  |  |         |  |     |  |  |  | |      /");
+        System.out.println("  /  /----.|  |____ |  |\\  \\----.|  `--'  |       \\    /    |  |____ |  `----.    |  |     |  `--'  | |  |\\  \\----.");
+        System.out.println(" /________||_______|| _| `._____| \\______/         \\__/     |_______| \\______|    |__|      \\______/  | _| `._____|");
+        System.out.println("");
+        System.out.println("     Zero Vector  v1.0.0");     
+        System.out.println("");
+
         logger.debug("开始初始化知识库管理器，基础存储路径: {}", baseStoragePath.toAbsolutePath());
 
         try {
@@ -144,7 +155,7 @@ public class KnowledgeBaseManager {
             manager.initialize();
             managers.put(name, manager);
 
-            logger.info("知识库 {} 加载成功", name);
+            logger.debug("知识库 {} 加载成功", name);
         } catch (IOException e) {
             throw new StorageException(storagePath.toString(), "loadKnowledgeBase", e);
         }

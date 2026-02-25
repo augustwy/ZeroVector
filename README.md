@@ -1,3 +1,12 @@
+```
+                                           _             
+                                          | |            
+        _______ _ __ ___   __   _____  ___| |_ ___  _ __ 
+        |_  / _ \ '__/ _ \  \ \ / / _ \/ __| __/ _ \| '__|
+         / /  __/ | | (_) |  \ V /  __/ (__| || (_) | |   
+        /___\___|_|  \___/    \_/ \___|\___|\__\___/|_| 
+```
+
 # ZeroVector
 
 **Zero-Copy, Zero-Distortion, Zero-Embedding Knowledge Base.**
@@ -57,7 +66,6 @@ ZeroVector/
 - **TreeBuilder** - 语义树构建器，使用虚拟线程并发处理
 - **ShardedTreeStorage** - 分片存储引擎，按需加载
 - **CachedLLMProvider** - LLM调用缓存层，减少API调用
-
 ## 快速开始
 
 ### 环境要求
@@ -86,12 +94,18 @@ mvn spring-boot:run
 // 创建 LLM 提供者
 LLMProvider llmProvider = new YourLLMProvider();
 
-// 创建文档理解器（配置最大切片大小）
+// 创建文档理解器（配置最大分块大小）
 DocumentComprehender documentComprehender = new DocumentComprehender(llmProvider, 4000);
 
 // 创建语义树管理器
 Path storagePath = Paths.get("./data/zerovector_storage");
-SemanticTreeManager manager = new SemanticTreeManager(llmProvider, documentComprehender, storagePath, true, new ConcurrencyProperties());
+SemanticTreeManager manager = new SemanticTreeManager(
+    llmProvider, 
+    documentComprehender, 
+    storagePath, 
+    true,  // 使用分片存储
+    new ConcurrencyProperties()
+);
 
 // 初始化
 manager.initialize();
@@ -142,6 +156,8 @@ String currentKb = semanticFacade.getCurrentKnowledgeBase();
 zerovector:
   enabled: true
   storage-base-path: ./data/knowledge_bases  # 知识库基础存储路径
+  use-sharded-storage: true             # 是否使用分片存储
+  shard-size: 100                      # 分片大小（节点/块数）
   
   llm-context:
     max-chunk-tokens: 4000
@@ -151,6 +167,43 @@ zerovector:
   concurrency:
     max-concurrent-requests: 5
     requests-per-second: 2.0
+  
+  cache:
+    enabled: true
+    comprehend-chunk:
+      max-size: 5000
+      expire-after-access: 4
+      time-unit: HOURS
+    generate-summary:
+      max-size: 2000
+      expire-after-access: 2
+      time-unit: HOURS
+    cluster-documents:
+      max-size: 1000
+      expire-after-access: 6
+      time-unit: HOURS
+    extract-keywords:
+      max-size: 3000
+      expire-after-access: 8
+      time-unit: HOURS
+    extract-entities:
+      max-size: 3000
+      expire-after-access: 8
+      time-unit: HOURS
+    generate-example-questions:
+      max-size: 2000
+      expire-after-access: 12
+      time-unit: HOURS
+    decide-navigation:
+      max-size: 5000
+      expire-after-access: 1
+      time-unit: HOURS
+  
+  hook:
+    enabled: true
+    hooks:
+      - cn.nexon.zerovector.core.hook.LoggingLifecycleHook
+      - com.xxx.xxx.CustomHook
 ```
 
 ### Spring Boot 集成
