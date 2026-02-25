@@ -6,6 +6,10 @@ import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
 import cn.nexon.zerovector.core.exception.NavigationException;
 import cn.nexon.zerovector.core.exception.StorageException;
+import cn.nexon.zerovector.core.hook.HookContext;
+import cn.nexon.zerovector.core.hook.HookExecutor;
+import cn.nexon.zerovector.core.hook.HookType;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.DocumentChunk;
@@ -36,8 +40,10 @@ public class SemanticTreeManager {
 
     private final LLMProvider llmProvider;
     private final DocumentComprehender documentComprehender;
+    private final HookExecutor hookExecutor;
     private KeywordDictionary keywordDictionary;
     private final Path storagePath;
+    private final String fileBasePath;
     private final String treeFilePath;
     private final String treeStorageDir;
     private final String dictionaryFilePath;
@@ -51,15 +57,20 @@ public class SemanticTreeManager {
     private HybridNavigator hybridNavigator;
 
     public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender, Path storagePath, boolean useShardedStorage, ConcurrencyProperties concurrencyProperties) {
+        this(llmProvider, documentComprehender, storagePath, useShardedStorage, concurrencyProperties, new DefaultHookExecutor());
+    }
+
+    public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender, Path storagePath, boolean useShardedStorage, ConcurrencyProperties concurrencyProperties, HookExecutor hookExecutor) {
         this.llmProvider = llmProvider;
         this.documentComprehender = documentComprehender;
+        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
         this.keywordDictionary = new KeywordDictionary();
         this.storagePath = storagePath;
-        String basePath = Paths.get(storagePath.toString(), "zerovector_storage").toString();
-        this.treeFilePath = basePath + ".tree";
-        this.treeStorageDir = basePath + "_shards";
-        this.dictionaryFilePath = basePath + ".dict";
-        this.documentsDir = basePath + "_docs";
+        this.fileBasePath = Paths.get(storagePath.toString(), "zerovector_storage").toString();
+        this.treeFilePath = this.fileBasePath + ".tree";
+        this.treeStorageDir = this.fileBasePath + "_shards";
+        this.dictionaryFilePath = this.fileBasePath + ".dict";
+        this.documentsDir = this.fileBasePath + "_docs";
         this.useShardedStorage = useShardedStorage;
         this.concurrencyProperties = concurrencyProperties;
     }
@@ -73,7 +84,7 @@ public class SemanticTreeManager {
                 logger.info("创建存储目录: {}", storagePath);
             }
             
-            String documentStoreFilePath = storagePath.toString() + ".data";
+            String documentStoreFilePath = this.fileBasePath + ".data";
             this.documentStore = MMapDocumentStore.open(documentStoreFilePath);
             
             Files.createDirectories(Paths.get(documentsDir));
@@ -97,8 +108,8 @@ public class SemanticTreeManager {
             }
             
             if (this.semanticTree != null) {
-                this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
-                this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
+                this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
+                this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore, hookExecutor);
                 logger.info("已加载已保存的语义树");
             }
         } catch (IOException e) {
@@ -107,19 +118,40 @@ public class SemanticTreeManager {
     }
 
     public void buildTree(List<Document> documents) {
-        logger.info("构建语义树，包含 {} 个文档", documents.size());
-        
-        DocumentProcessingResult processingResult = processDocuments(documents);
-        this.semanticTree = buildTreeInternal(processingResult.comprehendResultMap(), processingResult.chunkMap());
-        this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
-        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
-        
-        logger.info("语义树构建完成，包含 {} 个文档", documents.size());
+        long startTime = System.currentTimeMillis();
+        hookExecutor.executeHooks(HookType.TREE_BUILD_START, 
+            HookContext.builder(HookType.TREE_BUILD_START)
+                .data("documentCount", documents.size())
+        );
         
         try {
-            saveTree();
-        } catch (IOException e) {
-            throw new StorageException(treeFilePath, "saveTree", e);
+            DocumentProcessingResult processingResult = processDocuments(documents);
+            this.semanticTree = buildTreeInternal(processingResult.comprehendResultMap(), processingResult.chunkMap());
+            this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
+            this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore, hookExecutor);
+            
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.TREE_BUILD_END,
+                HookContext.builder(HookType.TREE_BUILD_END)
+                    .data("documentCount", documents.size())
+                    .data("nodeCount", semanticTree.nodes().size())
+                    .durationMillis(duration)
+            );
+            
+            try {
+                saveTree();
+            } catch (IOException e) {
+                throw new StorageException(treeFilePath, "saveTree", e);
+            }
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.TREE_BUILD_ERROR,
+                HookContext.builder(HookType.TREE_BUILD_ERROR)
+                    .data("documentCount", documents.size())
+                    .durationMillis(duration)
+                    .error(e)
+            );
+            throw e;
         }
     }
     
@@ -156,7 +188,7 @@ public class SemanticTreeManager {
     ) {}
     
     private SemanticTree buildTreeInternal(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
-        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties);
+        TreeBuilder builder = new TreeBuilder(llmProvider, keywordDictionary, documentStore, concurrencyProperties, hookExecutor);
         
         if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
             return builder.build(comprehendResultMap, chunkMap);
@@ -166,11 +198,24 @@ public class SemanticTreeManager {
     }
 
     public void addDocument(Path filePath) {
+        long startTime = System.currentTimeMillis();
+        hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_START,
+            HookContext.builder(HookType.DOCUMENT_UPLOAD_START)
+                .data("filePath", filePath.toString())
+        );
+        
         try {
             String md5 = calculateFileMD5(filePath);
             
             if (isDocumentAlreadyExists(md5)) {
-                logger.info("文件 {} 已存在（MD5: {}），跳过处理", filePath, md5);
+                long duration = System.currentTimeMillis() - startTime;
+                hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_END,
+                    HookContext.builder(HookType.DOCUMENT_UPLOAD_END)
+                        .data("filePath", filePath.toString())
+                        .data("skipped", true)
+                        .data("reason", "Document already exists")
+                        .durationMillis(duration)
+                );
                 return;
             }
             
@@ -180,6 +225,15 @@ public class SemanticTreeManager {
             DocumentProcessingResult processingResult = processSingleDocument(document);
             updateSemanticTreeFromDocuments(processingResult.comprehendResultMap(), processingResult.chunkMap());
 
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_END,
+                HookContext.builder(HookType.DOCUMENT_UPLOAD_END)
+                    .data("filePath", filePath.toString())
+                    .data("documentTitle", document.title())
+                    .data("documentCount", semanticTree.chunks().size())
+                    .durationMillis(duration)
+            );
+            
             logger.debug("添加文档完成，当前语义树包含 {} 个文档", semanticTree.chunks().size());
             
             try {
@@ -188,8 +242,22 @@ public class SemanticTreeManager {
                 throw new StorageException(treeFilePath, "saveTree", e);
             }
         } catch (StorageException e) {
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_ERROR,
+                HookContext.builder(HookType.DOCUMENT_UPLOAD_ERROR)
+                    .data("filePath", filePath.toString())
+                    .durationMillis(duration)
+                    .error(e)
+            );
             throw e;
         } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.DOCUMENT_UPLOAD_ERROR,
+                HookContext.builder(HookType.DOCUMENT_UPLOAD_ERROR)
+                    .data("filePath", filePath.toString())
+                    .durationMillis(duration)
+                    .error(e)
+            );
             throw new StorageException(filePath.toString(), "addDocument", e);
         }
     }
@@ -310,33 +378,62 @@ public class SemanticTreeManager {
     }
     
     private void updateNavigators() {
-        this.navigator = new Navigator(semanticTree, llmProvider, documentStore);
-        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore);
+        this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
+        this.hybridNavigator = new HybridNavigator(semanticTree, keywordDictionary, llmProvider, documentStore, hookExecutor);
     }
     
     public NavigationResult navigate(String query) {
-        if (semanticTree == null) {
-            throw new NavigationException(query, null, NavigationException.ERROR_CODE_TREE_NOT_INITIALIZED, 
-                "Semantic tree not built yet");
-        }
+        long startTime = System.currentTimeMillis();
+        hookExecutor.executeHooks(HookType.NAVIGATION_START,
+            HookContext.builder(HookType.NAVIGATION_START)
+                .data("query", query)
+        );
         
-        if (hybridNavigator != null) {
-            try {
-                return hybridNavigator.navigate(query);
-            } catch (Exception e) {
-                throw new NavigationException(query, semanticTree.rootNode().id(), 
-                    NavigationException.ERROR_CODE_LLM_DECISION_FAILED, "Navigation failed", e);
+        try {
+            if (semanticTree == null) {
+                throw new NavigationException(query, null, NavigationException.ERROR_CODE_TREE_NOT_INITIALIZED, 
+                    "Semantic tree not built yet");
             }
-        } else if (navigator != null) {
-            try {
-                return navigator.navigate(query);
-            } catch (Exception e) {
-                throw new NavigationException(query, semanticTree.rootNode().id(), 
-                    NavigationException.ERROR_CODE_LLM_DECISION_FAILED, "Navigation failed", e);
+            
+            NavigationResult result;
+            if (hybridNavigator != null) {
+                result = hybridNavigator.navigate(query);
+            } else if (navigator != null) {
+                result = navigator.navigate(query);
+            } else {
+                throw new NavigationException(query, null, NavigationException.ERROR_CODE_NO_NAVIGATOR, 
+                    "No navigator available");
             }
-        } else {
-            throw new NavigationException(query, null, NavigationException.ERROR_CODE_NO_NAVIGATOR, 
-                "No navigator available");
+            
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.NAVIGATION_END,
+                HookContext.builder(HookType.NAVIGATION_END)
+                    .data("query", query)
+                    .data("resultCount", result.documents().size())
+                    .durationMillis(duration)
+            );
+            
+            return result;
+        } catch (NavigationException e) {
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.NAVIGATION_ERROR,
+                HookContext.builder(HookType.NAVIGATION_ERROR)
+                    .data("query", query)
+                    .durationMillis(duration)
+                    .error(e)
+            );
+            throw e;
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            NavigationException navException = new NavigationException(query, semanticTree != null ? semanticTree.rootNode().id() : null, 
+                NavigationException.ERROR_CODE_LLM_DECISION_FAILED, "Navigation failed", e);
+            hookExecutor.executeHooks(HookType.NAVIGATION_ERROR,
+                HookContext.builder(HookType.NAVIGATION_ERROR)
+                    .data("query", query)
+                    .durationMillis(duration)
+                    .error(navException)
+            );
+            throw navException;
         }
     }
 

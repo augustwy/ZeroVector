@@ -5,6 +5,10 @@ import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
+import cn.nexon.zerovector.core.hook.HookContext;
+import cn.nexon.zerovector.core.hook.HookExecutor;
+import cn.nexon.zerovector.core.hook.HookType;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
@@ -25,25 +29,32 @@ public class TreeBuilder {
     private final LLMProvider llm;
     private final KeywordDictionary dictionary;
     private final MMapDocumentStore store;
+    private final HookExecutor hookExecutor;
 
     public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
+        this(llm, dictionary, store, concurrencyConfig, new DefaultHookExecutor());
+    }
+
+    public TreeBuilder(LLMProvider llm, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig, HookExecutor hookExecutor) {
         this.llm = llm;
         this.dictionary = dictionary;
         this.store = store;
+        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
     }
 
     public SemanticTree build(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunks) {
-        PerformanceMonitor buildMonitor = new PerformanceMonitor("TreeBuilder.build");
-        buildMonitor.start();
-        
-        logger.info("开始构建语义树，共 {} 个文档", comprehendResultMap.size());
+        long startTime = System.currentTimeMillis();
         
         TreeBuildResult result = buildRecursiveWithNodes("Root", comprehendResultMap);
         TreeNode root = result.root();
         
-        buildMonitor.stop();
-        logger.info("语义树构建完成，包含 {} 个文档，{} 个节点, 总耗时: {}ms", 
-                comprehendResultMap.size(), result.nodes().size(), buildMonitor.getDurationMillis());
+        long duration = System.currentTimeMillis() - startTime;
+        hookExecutor.executeHooks(HookType.TREE_BUILD_END,
+            HookContext.builder(HookType.TREE_BUILD_END)
+                .data("documentCount", comprehendResultMap.size())
+                .data("nodeCount", result.nodes().size())
+                .durationMillis(duration)
+        );
         
         return new SemanticTree(root, result.nodes(), chunks);
     }
@@ -58,10 +69,9 @@ public class TreeBuilder {
      * @return 更新后的语义树
      */
     public SemanticTree updateTree(SemanticTree existingTree, List<DocumentComprehendResult> newResults, Map<String, DocumentChunk> newChunks) {
-        logger.info("开始增量更新语义树，共 {} 个新文档", newResults.size());
+        long startTime = System.currentTimeMillis();
         
         if (existingTree == null || existingTree.rootNode() == null) {
-            logger.debug("现有语义树为空，执行完整构建");
             Map<String, DocumentComprehendResult> resultMap = new HashMap<>();
             for (int i = 0; i < newResults.size(); i++) {
                 DocumentComprehendResult result = newResults.get(i);
@@ -84,7 +94,6 @@ public class TreeBuilder {
             DocumentChunk chunk = newChunks.get(chunkId);
             
             if (chunk == null) {
-                logger.warn("文档 {} 的 chunk 信息不存在，跳过", chunkId);
                 continue;
             }
             
@@ -122,7 +131,6 @@ public class TreeBuilder {
                         );
                         
                         updatedNodes.put(targetNode.id(), updatedLeafNode);
-                        logger.debug("文档 {} 已添加到叶子节点 {}", chunkId, targetNode.name());
                     } else {
                         TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
                         updatedNodes.put(newLeafNode.id(), newLeafNode);
@@ -165,8 +173,6 @@ public class TreeBuilder {
                         if (targetNode.id().equals(currentRoot.id())) {
                             currentRoot = updatedCategoryNode;
                         }
-                        
-                        logger.debug("文档 {} 已添加到叶子节点 {}，将叶子节点转换为分类节点", chunkId, targetNode.name());
                     }
                 } else {
                     TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
@@ -188,7 +194,6 @@ public class TreeBuilder {
                     );
                     
                     updatedNodes.put(targetNode.id(), updatedCategoryNode);
-                    logger.debug("文档 {} 已添加到分类节点 {}，创建新叶子节点", chunkId, targetNode.name());
                 }
             } else {
                 TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
@@ -215,11 +220,17 @@ public class TreeBuilder {
                 
                 updatedNodes.put(root.id(), updatedRoot);
                 currentRoot = updatedRoot;
-                logger.debug("文档 {} 已添加到根节点", chunkId);
             }
         }
         
-        logger.info("增量更新完成，语义树包含 {} 个文档，{} 个节点", updatedChunks.size(), updatedNodes.size());
+        long duration = System.currentTimeMillis() - startTime;
+        hookExecutor.executeHooks(HookType.TREE_BUILD_END,
+            HookContext.builder(HookType.TREE_BUILD_END)
+                .data("documentCount", updatedChunks.size())
+                .data("nodeCount", updatedNodes.size())
+                .durationMillis(duration)
+        );
+        
         return new SemanticTree(currentRoot, updatedNodes, updatedChunks);
     }
 

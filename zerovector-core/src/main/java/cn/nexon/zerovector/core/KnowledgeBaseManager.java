@@ -4,6 +4,8 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
 import cn.nexon.zerovector.core.exception.StorageException;
+import cn.nexon.zerovector.core.hook.HookExecutor;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,16 +27,24 @@ public class KnowledgeBaseManager {
     private final LLMProvider llmProvider;
     private final DocumentComprehender documentComprehender;
     private final ConcurrencyProperties concurrencyProperties;
+    private final HookExecutor hookExecutor;
     private final Path baseStoragePath;
     private String currentKnowledgeBase;
     private boolean initialized = false;
 
     public KnowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
                                    ConcurrencyProperties concurrencyProperties, String baseStoragePath) {
+        this(llmProvider, documentComprehender, concurrencyProperties, baseStoragePath, new DefaultHookExecutor());
+    }
+
+    public KnowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
+                                   ConcurrencyProperties concurrencyProperties, String baseStoragePath, 
+                                   HookExecutor hookExecutor) {
         this.llmProvider = llmProvider;
         this.documentComprehender = documentComprehender;
         this.concurrencyProperties = concurrencyProperties;
         this.baseStoragePath = Paths.get(baseStoragePath);
+        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
         this.currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
     }
 
@@ -127,7 +137,8 @@ public class KnowledgeBaseManager {
                 documentComprehender,
                 storagePath,
                 true,
-                concurrencyProperties
+                concurrencyProperties,
+                hookExecutor
             );
 
             manager.initialize();
@@ -203,7 +214,8 @@ public class KnowledgeBaseManager {
                 documentComprehender,
                 kbStoragePath,
                 true,
-                concurrencyProperties
+                concurrencyProperties,
+                hookExecutor
             );
 
             manager.initialize();

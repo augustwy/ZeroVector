@@ -5,6 +5,10 @@ import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.exception.DocumentProcessingException;
 import cn.nexon.zerovector.core.exception.PromptLoadException;
+import cn.nexon.zerovector.core.hook.HookContext;
+import cn.nexon.zerovector.core.hook.HookExecutor;
+import cn.nexon.zerovector.core.hook.HookType;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.KeywordDefinition;
 import cn.nexon.zerovector.core.util.FileUtils;
@@ -19,8 +23,6 @@ import java.util.Map;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,27 +30,58 @@ public class DocumentComprehender {
     private static final Logger logger = LoggerFactory.getLogger(DocumentComprehender.class);
 
     private final LLMProvider llmProvider;
+    private final HookExecutor hookExecutor;
     private final int maxChunkSize;
     private static final int MMAP_THRESHOLD = 10 * 1024 * 1024;
 
     public DocumentComprehender(LLMProvider llmProvider, int maxChunkSize) {
+        this(llmProvider, maxChunkSize, new DefaultHookExecutor());
+    }
+
+    public DocumentComprehender(LLMProvider llmProvider, int maxChunkSize, HookExecutor hookExecutor) {
         this.llmProvider = llmProvider;
         this.maxChunkSize = maxChunkSize;
+        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
     }
 
     public DocumentComprehendResult comprehend(Document document) {
-        PerformanceMonitor totalMonitor = new PerformanceMonitor("DocumentComprehender.comprehend");
-        totalMonitor.start();
+        long startTime = System.currentTimeMillis();
+        hookExecutor.executeHooks(HookType.DOCUMENT_COMPREHEND_START,
+            HookContext.builder(HookType.DOCUMENT_COMPREHEND_START)
+                .data("documentId", document.id())
+                .data("documentTitle", document.title())
+        );
         
         try {
+            DocumentComprehendResult result;
             if (document.isFileBased()) {
-                return comprehendFileBased(document);
+                result = comprehendFileBased(document);
             } else {
-                return comprehendContentBased(document);
+                result = comprehendContentBased(document);
             }
-        } finally {
-            totalMonitor.stop();
-            logger.info("文档理解总耗时: {}ms, 文档: {}", totalMonitor.getDurationMillis(), document.title());
+            
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.DOCUMENT_COMPREHEND_END,
+                HookContext.builder(HookType.DOCUMENT_COMPREHEND_END)
+                    .data("documentId", document.id())
+                    .data("documentTitle", document.title())
+                    .data("keywordCount", result.keywordDefinitions().size())
+                    .durationMillis(duration)
+            );
+            
+            logger.info("文档理解总耗时: {}ms, 文档: {}", duration, document.title());
+            
+            return result;
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            hookExecutor.executeHooks(HookType.DOCUMENT_COMPREHEND_ERROR,
+                HookContext.builder(HookType.DOCUMENT_COMPREHEND_ERROR)
+                    .data("documentId", document.id())
+                    .data("documentTitle", document.title())
+                    .durationMillis(duration)
+                    .error(e)
+            );
+            throw e;
         }
     }
 

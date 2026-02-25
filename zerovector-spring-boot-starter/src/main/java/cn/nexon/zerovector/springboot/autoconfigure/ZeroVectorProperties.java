@@ -2,6 +2,10 @@ package cn.nexon.zerovector.springboot.autoconfigure;
 
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import jakarta.validation.constraints.NotBlank;
+
+import java.util.ArrayList;
+import java.util.List;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -45,6 +49,9 @@ public class ZeroVectorProperties {
 
     @Valid
     private Cache cache = new Cache();
+
+    @Valid
+    private Hook hook = new Hook();
 
     public boolean isEnabled() {
         return enabled;
@@ -121,6 +128,14 @@ public class ZeroVectorProperties {
 
     public void setCache(Cache cache) {
         this.cache = cache;
+    }
+
+    public Hook getHook() {
+        return hook;
+    }
+
+    public void setHook(Hook hook) {
+        this.hook = hook;
     }
 
     /**
@@ -286,6 +301,30 @@ public class ZeroVectorProperties {
 
         public void setTimeUnit(String timeUnit) {
             this.timeUnit = timeUnit;
+        }
+    }
+
+    /**
+     * 钩子配置
+     */
+    public static class Hook {
+        private boolean enabled = true;
+        private List<String> hooks = new ArrayList<>();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public List<String> getHooks() {
+            return hooks;
+        }
+
+        public void setHooks(List<String> hooks) {
+            this.hooks = hooks;
         }
     }
 }

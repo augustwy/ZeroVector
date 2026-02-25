@@ -3,6 +3,10 @@ package cn.nexon.zerovector.core.tree;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
+import cn.nexon.zerovector.core.hook.HookContext;
+import cn.nexon.zerovector.core.hook.HookExecutor;
+import cn.nexon.zerovector.core.hook.HookType;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import org.slf4j.Logger;
@@ -15,10 +19,6 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
-/**
- * 语义导航器
- * 基于用户查询在语义树中进行导航，找到相关文档
- */
 public class Navigator {
     private static final Logger logger = LoggerFactory.getLogger(Navigator.class);
     private static final int MAX_NAVIGATION_HISTORY = 100;
@@ -26,14 +26,20 @@ public class Navigator {
     private final SemanticTree semanticTree;
     private final LLMProvider llmService;
     private final MMapDocumentStore documentStore;
+    private final HookExecutor hookExecutor;
     
     private TreeNode currentNode;
     private final List<NavigationPath> navigationHistory;
     
     public Navigator(SemanticTree semanticTree, LLMProvider llmService, MMapDocumentStore documentStore) {
+        this(semanticTree, llmService, documentStore, new DefaultHookExecutor());
+    }
+
+    public Navigator(SemanticTree semanticTree, LLMProvider llmService, MMapDocumentStore documentStore, HookExecutor hookExecutor) {
         this.semanticTree = semanticTree;
         this.llmService = llmService;
         this.documentStore = documentStore;
+        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
         this.currentNode = semanticTree.rootNode();
         this.navigationHistory = new CopyOnWriteArrayList<>();
     }

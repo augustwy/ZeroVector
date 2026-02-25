@@ -5,6 +5,10 @@ import cn.nexon.zerovector.core.ai.CacheConfig;
 import cn.nexon.zerovector.core.ai.CachedLLMProvider;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
+import cn.nexon.zerovector.core.hook.LifecycleHook;
+import cn.nexon.zerovector.core.hook.HookExecutor;
+import cn.nexon.zerovector.core.hook.HookRegistry;
 import cn.nexon.zerovector.springboot.service.impl.SpringAiLLMProvider;
 import cn.nexon.zerovector.springboot.service.impl.LangChain4jLLMProvider;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
@@ -13,6 +17,7 @@ import dev.langchain4j.model.chat.ChatLanguageModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -21,8 +26,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -41,16 +45,16 @@ public class ZeroVectorAutoConfiguration {
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(ChatModel.class)
     static class SpringAiConfiguration {
-        
+
         @Bean
         @ConditionalOnMissingBean(name = "springAiLLMService")
-        public LLMProvider springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
+        LLMProvider springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
             return new SpringAiLLMProvider(chatModel, config.getModel());
         }
-        
+
         @Bean
         @ConditionalOnMissingBean(LLMProvider.class)
-        public LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
+        LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
             if (!config.getCache().isEnabled()) {
                 logger.info("LLM缓存已禁用");
                 return delegate;
@@ -86,16 +90,16 @@ public class ZeroVectorAutoConfiguration {
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(ChatLanguageModel.class)
     static class Langchain4jConfiguration {
-        
+
         @Bean
         @ConditionalOnMissingBean(name = "langChain4jLLMService")
-        public LLMProvider langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
+        LLMProvider langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
             return new LangChain4jLLMProvider(chatLanguageModel, config.getLangChain4j());
         }
-        
+
         @Bean
         @ConditionalOnMissingBean(LLMProvider.class)
-        public LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
+        LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
             if (!config.getCache().isEnabled()) {
                 logger.info("LLM缓存已禁用");
                 return delegate;
@@ -128,14 +132,61 @@ public class ZeroVectorAutoConfiguration {
     }
 
     /**
+     * 创建钩子注册表
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    HookRegistry hookRegistry() {
+        return new HookRegistry();
+    }
+
+    /**
+     * 创建钩子执行器
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    HookExecutor hookExecutor(HookRegistry hookRegistry, ObjectProvider<LifecycleHook> hooksProvider,
+                              ZeroVectorProperties properties) {
+        ZeroVectorProperties.Hook hookConfig = properties.getHook();
+        
+        if (hookConfig.isEnabled()) {
+            hooksProvider.forEach(hook -> {
+                hookRegistry.register(hook);
+                logger.info("已注册自定义钩子: {}", hook.getName());
+            });
+            
+            List<String> hooks = hookConfig.getHooks();
+            if (hooks != null && !hooks.isEmpty()) {
+                for (String hookClassName : hooks) {
+                    try {
+                        Class<?> hookClass = Class.forName(hookClassName);
+                        if (LifecycleHook.class.isAssignableFrom(hookClass)) {
+                            LifecycleHook hook = (LifecycleHook) hookClass.getDeclaredConstructor().newInstance();
+                            hookRegistry.register(hook);
+                            logger.info("已通过配置注册钩子: {}", hook.getName());
+                        } else {
+                            logger.warn("类 {} 不是 LifecycleHook 的实现类，跳过", hookClassName);
+                        }
+                    } catch (Exception e) {
+                        logger.warn("无法实例化钩子类 {}: {}", hookClassName, e.getMessage());
+                    }
+                }
+            }
+        }
+        
+        return new DefaultHookExecutor(hookRegistry);
+    }
+
+    /**
      * 创建文档理解器
      */
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public DocumentComprehender documentComprehender(LLMProvider llmProvider, ZeroVectorProperties properties) {
+    DocumentComprehender documentComprehender(LLMProvider llmProvider, ZeroVectorProperties properties,
+                                              HookExecutor hookExecutor) {
         ZeroVectorProperties.LLMContext llmContext = properties.getLlmContext();
-        return new DocumentComprehender(llmProvider, llmContext.getMaxChunkTokens());
+        return new DocumentComprehender(llmProvider, llmContext.getMaxChunkTokens(), hookExecutor);
     }
 
     /**
@@ -144,15 +195,16 @@ public class ZeroVectorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public KnowledgeBaseManager knowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender, 
-                                                      ZeroVectorProperties properties) {
+    KnowledgeBaseManager knowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
+                                              ZeroVectorProperties properties, HookExecutor hookExecutor) {
         logger.info("创建知识库管理器，基础存储路径: {}", properties.getStorageBasePath());
         
         KnowledgeBaseManager manager = new KnowledgeBaseManager(
             llmProvider, 
             documentComprehender, 
             properties.getConcurrency(), 
-            properties.getStorageBasePath()
+            properties.getStorageBasePath(),
+            hookExecutor
         );
         
         try {
@@ -171,7 +223,7 @@ public class ZeroVectorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "zerovector", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public SemanticFacade semanticFacade(KnowledgeBaseManager knowledgeBaseManager) {
+    SemanticFacade semanticFacade(KnowledgeBaseManager knowledgeBaseManager) {
         return new SemanticFacade(knowledgeBaseManager);
     }
 }

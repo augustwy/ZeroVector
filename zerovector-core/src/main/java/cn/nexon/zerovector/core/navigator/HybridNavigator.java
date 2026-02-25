@@ -5,6 +5,10 @@ import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.exception.NavigationException;
 import cn.nexon.zerovector.core.exception.PromptLoadException;
+import cn.nexon.zerovector.core.hook.HookContext;
+import cn.nexon.zerovector.core.hook.HookExecutor;
+import cn.nexon.zerovector.core.hook.HookType;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
@@ -26,17 +30,22 @@ public class HybridNavigator {
     private final KeywordDictionary dictionary;
     private final LLMProvider llm;
     private final MMapDocumentStore store;
+    private final HookExecutor hookExecutor;
     
     public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, MMapDocumentStore store) {
+        this(tree, dictionary, llm, store, new DefaultHookExecutor());
+    }
+
+    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, MMapDocumentStore store, HookExecutor hookExecutor) {
         this.tree = tree;
         this.dictionary = dictionary;
         this.llm = llm;
         this.store = store;
+        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
     }
     
     public NavigationResult navigate(String query) {
-        PerformanceMonitor navigateMonitor = new PerformanceMonitor("HybridNavigator.navigate");
-        navigateMonitor.start();
+        long startTime = System.currentTimeMillis();
         
         try {
             String fastTrackNodeId = null;
@@ -46,7 +55,6 @@ public class HybridNavigator {
                 LLMResponse keywordsResponse = llm.extractQueryKeywords(keywordsPrompt);
                 
                 List<String> extractedKeywords = parseKeywordsResponse(keywordsResponse.content());
-                logger.debug("从查询中提取的关键词: {}", extractedKeywords);
                 
                 if (!extractedKeywords.isEmpty()) {
                     Map<String, Double> candidates = dictionary.matchCandidatesFromKeywords(extractedKeywords);
@@ -55,7 +63,6 @@ public class HybridNavigator {
                     }
                 }
             } catch (Exception e) {
-                logger.warn("使用大模型提取关键字失败，回退到简单匹配: {}", e.getMessage());
                 Map<String, Double> candidates = dictionary.matchCandidates(query);
                 if (!candidates.isEmpty()) {
                     fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
@@ -66,7 +73,6 @@ public class HybridNavigator {
             if (fastTrackNodeId != null) {
                 currentNode = tree.getNode(fastTrackNodeId);
                 if (currentNode == null) {
-                    logger.warn("快速通道节点 {} 不存在，回退到根节点", fastTrackNodeId);
                     currentNode = tree.rootNode();
                 }
             } else {
@@ -78,26 +84,20 @@ public class HybridNavigator {
                     "无法获取起始节点进行导航");
             }
                 
-            return navigateInternal(query, currentNode, new ArrayList<>());
+            return navigateInternal(query, currentNode, new ArrayList<>(), startTime);
         } catch (NavigationException e) {
             throw e;
         } catch (Exception e) {
             throw new NavigationException(query, tree != null ? tree.rootNode().id() : null, 
                 NavigationException.ERROR_CODE_LLM_DECISION_FAILED, "Navigation failed", e);
-        } finally {
-            navigateMonitor.stop();
-            logger.info("导航查询总耗时: {}ms, 查询: {}", navigateMonitor.getDurationMillis(), query);
         }
     }
     
-    private NavigationResult navigateInternal(String query, TreeNode startNode, List<NavigationPath> navigationHistory) {
+    private NavigationResult navigateInternal(String query, TreeNode startNode, List<NavigationPath> navigationHistory, long startTime) {
         List<TreeNode> path = new ArrayList<>();
         path.add(startNode);
         TreeNode current = startNode;
         int stepCount = 0;
-        
-        PerformanceMonitor internalMonitor = new PerformanceMonitor("HybridNavigator.navigateInternal");
-        internalMonitor.start();
         
         NavigationPath currentPath = new NavigationPath(
             query,
@@ -112,24 +112,16 @@ public class HybridNavigator {
             }
             
             stepCount++;
-            PerformanceMonitor stepMonitor = new PerformanceMonitor("HybridNavigator.navigateStep");
-            stepMonitor.start();
             
             String prompt = buildNavigationPrompt(query, current);
             
-            PerformanceMonitor llmMonitor = new PerformanceMonitor("HybridNavigator.llmDecideNavigation");
-            llmMonitor.start();
             LLMResponse response = llm.decideNavigation(prompt);
-            llmMonitor.stop();
             
             NavigationAction action = parseNavigationResponse(response.content(), getCurrentChildNodes(current));
             
             switch (action) {
                 case NavigationAction.SelectChild(String nodeId, String reasoning, double conf) -> {
                     if (conf < 0.3) {
-                        stepMonitor.stop();
-                        logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 触发回退", 
-                                stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                         return handleFallback(query, navigationHistory);
                     }
                     TreeNode nextNode = tree.getNode(nodeId);
@@ -148,21 +140,12 @@ public class HybridNavigator {
                     }
                 }
                 case NavigationAction.ExpandMultiple(List<String> nodeIds, String reasoning) -> {
-                    stepMonitor.stop();
-                    logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 多分支扩展", 
-                            stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                     return handleMultiPath(query, nodeIds, navigationHistory);
                 }
                 case NavigationAction.FallbackSearch(String reason) -> {
-                    stepMonitor.stop();
-                    logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 触发回退搜索", 
-                            stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                     return handleFallback(query, navigationHistory);
                 }
                 case NavigationAction.Stop(String reasoning) -> {
-                    stepMonitor.stop();
-                    logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms, 停止导航", 
-                            stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
                     return new NavigationResult(
                         List.of(),
                         reasoning,
@@ -173,15 +156,25 @@ public class HybridNavigator {
                 }
             }
             
-            stepMonitor.stop();
-            logger.debug("导航步骤 {}/{} 耗时: {}ms, LLM决策耗时: {}ms", 
-                    stepCount, stepCount, stepMonitor.getDurationMillis(), llmMonitor.getDurationMillis());
+            hookExecutor.executeHooks(HookType.NAVIGATION_STEP,
+                HookContext.builder(HookType.NAVIGATION_STEP)
+                    .data("query", query)
+                    .data("nodeName", current.name())
+                    .data("stepCount", stepCount)
+            );
         }
         
-        internalMonitor.stop();
-        logger.debug("导航内部逻辑总耗时: {}ms, 步骤数: {}", internalMonitor.getDurationMillis(), stepCount);
-        
         List<DocumentChunk> chunks = loadChunks(current.chunkIds());
+        
+        long duration = System.currentTimeMillis() - startTime;
+        hookExecutor.executeHooks(HookType.NAVIGATION_END,
+            HookContext.builder(HookType.NAVIGATION_END)
+                .data("query", query)
+                .data("resultCount", chunks.size())
+                .data("stepCount", stepCount)
+                .durationMillis(duration)
+        );
+        
         return new NavigationResult(
             chunks,
             "Reached leaf node: " + current.name(),
