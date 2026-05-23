@@ -99,18 +99,18 @@ public class TreeBuilder {
         Map<String, TreeNode> updatedNodes = new HashMap<>(existingTree.nodes());
         Map<String, DocumentChunk> updatedChunks = new HashMap<>(existingTree.chunks());
         updatedChunks.putAll(newChunks);
-        
-        List<String> chunkIds = new ArrayList<>(newChunks.keySet());
+
+        List<Map.Entry<String, DocumentChunk>> chunkEntries = new ArrayList<>(newChunks.entrySet());
         TreeNode currentRoot = existingTree.rootNode();
-        
+
         for (int i = 0; i < newResults.size(); i++) {
             DocumentComprehendResult result = newResults.get(i);
-            String chunkId = chunkIds.get(i);
-            DocumentChunk chunk = newChunks.get(chunkId);
-            
-            if (chunk == null) {
+            if (i >= chunkEntries.size()) {
                 continue;
             }
+            Map.Entry<String, DocumentChunk> entry = chunkEntries.get(i);
+            String chunkId = entry.getKey();
+            DocumentChunk chunk = entry.getValue();
             
             stats.merge(result.llmUsageStats());
             

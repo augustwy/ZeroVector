@@ -202,6 +202,11 @@ public class ZeroVectorProperties {
     public static class Cache {
         private boolean enabled = true;
         
+        /**
+         * 智能缓存策略配置
+         */
+        private SmartCacheStrategyConfig smartCache = new SmartCacheStrategyConfig();
+        
         private CacheConfig comprehendChunk = new CacheConfig(5000L, 4L, "HOURS");
         private CacheConfig generateSummary = new CacheConfig(2000L, 2L, "HOURS");
         private CacheConfig clusterDocuments = new CacheConfig(1000L, 6L, "HOURS");
@@ -272,6 +277,67 @@ public class ZeroVectorProperties {
 
         public void setDecideNavigation(CacheConfig decideNavigation) {
             this.decideNavigation = decideNavigation;
+        }
+
+        public SmartCacheStrategyConfig getSmartCache() {
+            return smartCache;
+        }
+
+        public void setSmartCache(SmartCacheStrategyConfig smartCache) {
+            this.smartCache = smartCache;
+        }
+    }
+
+    /**
+     * 智能缓存策略配置
+     */
+    public static class SmartCacheStrategyConfig {
+        /**
+         * 相似性阈值，范围0-1
+         */
+        private double similarityThreshold = 0.85;
+
+        /**
+         * 最大相似性匹配长度
+         */
+        private int maxSimilarityLength = 500;
+
+        /**
+         * 是否启用相似性匹配
+         */
+        private boolean enableSimilarityMatching = true;
+
+        public SmartCacheStrategyConfig() {
+        }
+
+        public SmartCacheStrategyConfig(double similarityThreshold, int maxSimilarityLength, boolean enableSimilarityMatching) {
+            this.similarityThreshold = similarityThreshold;
+            this.maxSimilarityLength = maxSimilarityLength;
+            this.enableSimilarityMatching = enableSimilarityMatching;
+        }
+
+        public double getSimilarityThreshold() {
+            return similarityThreshold;
+        }
+
+        public void setSimilarityThreshold(double similarityThreshold) {
+            this.similarityThreshold = similarityThreshold;
+        }
+
+        public int getMaxSimilarityLength() {
+            return maxSimilarityLength;
+        }
+
+        public void setMaxSimilarityLength(int maxSimilarityLength) {
+            this.maxSimilarityLength = maxSimilarityLength;
+        }
+
+        public boolean isEnableSimilarityMatching() {
+            return enableSimilarityMatching;
+        }
+
+        public void setEnableSimilarityMatching(boolean enableSimilarityMatching) {
+            this.enableSimilarityMatching = enableSimilarityMatching;
         }
     }
 

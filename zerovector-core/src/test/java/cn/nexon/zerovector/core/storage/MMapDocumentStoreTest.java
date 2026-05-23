@@ -6,11 +6,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class MMapDocumentStoreTest {
+    private static final Logger logger = LoggerFactory.getLogger(MMapDocumentStoreTest.class);
     
     @TempDir
     Path tempDir;
@@ -84,7 +89,7 @@ class MMapDocumentStoreTest {
         
         store.saveIndex();
         
-        MMapDocumentStore newStore = MMapDocumentStore.open(store.toString());
+        MMapDocumentStore newStore = MMapDocumentStore.open(store.getDataFilePath());
         assertEquals("Content 1", newStore.getChunk("chunk1"));
         assertEquals("Content 2", newStore.getChunk("chunk2"));
         newStore.close();

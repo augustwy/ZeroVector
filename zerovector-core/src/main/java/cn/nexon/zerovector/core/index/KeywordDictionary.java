@@ -263,6 +263,17 @@ public final class KeywordDictionary {
     }
 
     /**
+     * 删除关键词定义及其关联的倒排索引和权重
+     *
+     * @param keyword 要删除的关键词
+     */
+    public void removeKeywordDefinition(String keyword) {
+        keywordDefinitions.remove(keyword);
+        invertedIndex.remove(keyword);
+        keywordWeights.remove(keyword);
+    }
+
+    /**
      * 获取关键词字典大小
      * 
      * @return 关键词定义的数量

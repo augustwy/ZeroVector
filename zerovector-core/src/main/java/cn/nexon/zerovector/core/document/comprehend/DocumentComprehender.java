@@ -14,6 +14,7 @@ import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.KeywordDefinition;
 import cn.nexon.zerovector.core.util.FileUtils;
 import cn.nexon.zerovector.core.util.JsonUtils;
+import cn.nexon.zerovector.core.util.MmapUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -310,24 +311,12 @@ public class DocumentComprehender {
         if (buffer == null) {
             return;
         }
-
         try {
             buffer.force();
-
-            try {
-                java.lang.reflect.Field cleanerField = buffer.getClass().getDeclaredField("cleaner");
-                cleanerField.setAccessible(true);
-                Object cleaner = cleanerField.get(buffer);
-                if (cleaner != null) {
-                    java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
-                    cleanMethod.invoke(cleaner);
-                }
-            } catch (Exception e) {
-                logger.warn("释放 mmap buffer 失败", e);
-            }
         } catch (Exception e) {
             logger.warn("强制写入 mmap buffer 失败", e);
         }
+        MmapUtils.clean(buffer);
     }
 
     private String buildContext(String previousSummary, List<KeywordDefinition> previousKeywords, String currentChunk) {

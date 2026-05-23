@@ -60,7 +60,8 @@ public class DocumentController {
                 Files.createDirectories(uploadPath);
             }
 
-            Path filePath = uploadPath.resolve(originalFilename);
+            String safeFilename = Paths.get(originalFilename).getFileName().toString();
+            Path filePath = uploadPath.resolve(safeFilename);
             file.transferTo(filePath.toFile());
 
             DocumentUploadResult result = semanticHub.addDocument(filePath);
@@ -73,15 +74,8 @@ public class DocumentController {
             response.put("filename", originalFilename);
             response.put("filePath", filePath.toString());
 
-            LLMUsageStats stats = result.llmUsageStats();
-            if (stats != null && stats.getCallCount() > 0) {
-                Map<String, Object> llmStats = new HashMap<>();
-                llmStats.put("callCount", stats.getCallCount());
-                llmStats.put("totalTokens", stats.getTotalTokens());
-                llmStats.put("inputTokens", stats.getTotalInputTokens());
-                llmStats.put("outputTokens", stats.getTotalOutputTokens());
-                llmStats.put("totalDurationMs", stats.getTotalDuration());
-                llmStats.put("averageDurationMs", stats.getAverageDuration());
+            Map<String, Object> llmStats = toLlmStatsMap(result.llmUsageStats());
+            if (llmStats != null) {
                 response.put("llmUsageStats", llmStats);
             }
 
@@ -165,14 +159,10 @@ public class DocumentController {
                     totalCallCount += stats.getCallCount();
                     totalDurationMs += stats.getTotalDuration();
 
-                    Map<String, Object> llmStats = new HashMap<>();
-                    llmStats.put("callCount", stats.getCallCount());
-                    llmStats.put("totalTokens", stats.getTotalTokens());
-                    llmStats.put("inputTokens", stats.getTotalInputTokens());
-                    llmStats.put("outputTokens", stats.getTotalOutputTokens());
-                    llmStats.put("totalDurationMs", stats.getTotalDuration());
-                    llmStats.put("averageDurationMs", stats.getAverageDuration());
-                    docResult.put("llmUsageStats", llmStats);
+                    Map<String, Object> llmStats = toLlmStatsMap(stats);
+                    if (llmStats != null) {
+                        docResult.put("llmUsageStats", llmStats);
+                    }
                 }
 
                 documentResults.add(docResult);
@@ -229,15 +219,8 @@ public class DocumentController {
             response.put("path", searchResult.path());
             response.put("documentCount", searchResult.documents() != null ? searchResult.documents().size() : 0);
 
-            LLMUsageStats stats = searchResult.llmUsageStats();
-            if (stats != null && stats.getCallCount() > 0) {
-                Map<String, Object> llmStats = new HashMap<>();
-                llmStats.put("callCount", stats.getCallCount());
-                llmStats.put("totalTokens", stats.getTotalTokens());
-                llmStats.put("inputTokens", stats.getTotalInputTokens());
-                llmStats.put("outputTokens", stats.getTotalOutputTokens());
-                llmStats.put("totalDurationMs", stats.getTotalDuration());
-                llmStats.put("averageDurationMs", stats.getAverageDuration());
+            Map<String, Object> llmStats = toLlmStatsMap(searchResult.llmUsageStats());
+            if (llmStats != null) {
                 response.put("llmUsageStats", llmStats);
             }
 
@@ -259,5 +242,19 @@ public class DocumentController {
         response.put("status", "ok");
         response.put("message", "Document API is running");
         return ResponseEntity.ok(response);
+    }
+
+    private static Map<String, Object> toLlmStatsMap(LLMUsageStats stats) {
+        if (stats == null || stats.getCallCount() <= 0) {
+            return null;
+        }
+        Map<String, Object> llmStats = new HashMap<>();
+        llmStats.put("callCount", stats.getCallCount());
+        llmStats.put("totalTokens", stats.getTotalTokens());
+        llmStats.put("inputTokens", stats.getTotalInputTokens());
+        llmStats.put("outputTokens", stats.getTotalOutputTokens());
+        llmStats.put("totalDurationMs", stats.getTotalDuration());
+        llmStats.put("averageDurationMs", stats.getAverageDuration());
+        return llmStats;
     }
 }

@@ -55,34 +55,7 @@ public class ZeroVectorAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(LLMProvider.class)
         LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
-            if (!config.getCache().isEnabled()) {
-                logger.debug("LLM缓存已禁用");
-                return delegate;
-            }
-            
-            Map<SmartCacheStrategy.RequestType, CacheConfig> cacheConfigs = new ConcurrentHashMap<>();
-            cacheConfigs.put(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, 
-                toCacheConfig(config.getCache().getComprehendChunk()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, 
-                toCacheConfig(config.getCache().getGenerateSummary()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, 
-                toCacheConfig(config.getCache().getClusterDocuments()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, 
-                toCacheConfig(config.getCache().getExtractKeywords()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, 
-                toCacheConfig(config.getCache().getExtractEntities()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, 
-                toCacheConfig(config.getCache().getGenerateExampleQuestions()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, 
-                toCacheConfig(config.getCache().getDecideNavigation()));
-            
-            logger.debug("LLM缓存已启用，配置: {}", config.getCache());
-            return new CachedLLMProvider(delegate, cacheConfigs);
-        }
-        
-        private CacheConfig toCacheConfig(ZeroVectorProperties.CacheConfig config) {
-            TimeUnit timeUnit = TimeUnit.valueOf(config.getTimeUnit().toUpperCase());
-            return new CacheConfig(config.getMaxSize(), config.getExpireAfterAccess(), timeUnit, true, "");
+            return createCachedLLMProvider(delegate, config);
         }
     }
     
@@ -100,35 +73,63 @@ public class ZeroVectorAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(LLMProvider.class)
         LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
-            if (!config.getCache().isEnabled()) {
-                logger.debug("LLM缓存已禁用");
-                return delegate;
-            }
-            
-            Map<SmartCacheStrategy.RequestType, CacheConfig> cacheConfigs = new ConcurrentHashMap<>();
-            cacheConfigs.put(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, 
-                toCacheConfig(config.getCache().getComprehendChunk()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, 
-                toCacheConfig(config.getCache().getGenerateSummary()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, 
-                toCacheConfig(config.getCache().getClusterDocuments()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, 
-                toCacheConfig(config.getCache().getExtractKeywords()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, 
-                toCacheConfig(config.getCache().getExtractEntities()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, 
-                toCacheConfig(config.getCache().getGenerateExampleQuestions()));
-            cacheConfigs.put(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, 
-                toCacheConfig(config.getCache().getDecideNavigation()));
-            
-            logger.debug("LLM缓存已启用，配置: {}", config.getCache());
-            return new CachedLLMProvider(delegate, cacheConfigs);
+            return createCachedLLMProvider(delegate, config);
+        }
+    }
+    
+    /**
+     * 创建缓存的LLM提供者
+     */
+    private static LLMProvider createCachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
+        if (!config.getCache().isEnabled()) {
+            logger.debug("LLM缓存已禁用");
+            return delegate;
         }
         
-        private CacheConfig toCacheConfig(ZeroVectorProperties.CacheConfig config) {
-            TimeUnit timeUnit = TimeUnit.valueOf(config.getTimeUnit().toUpperCase());
-            return new CacheConfig(config.getMaxSize(), config.getExpireAfterAccess(), timeUnit, true, "");
+        // 配置SmartCacheStrategy
+        if (config.getCache() != null && config.getCache().getSmartCache() != null) {
+            ZeroVectorProperties.SmartCacheStrategyConfig smartCacheConfig = config.getCache().getSmartCache();
+            SmartCacheStrategy.setSimilarityThreshold(smartCacheConfig.getSimilarityThreshold());
+            SmartCacheStrategy.setMaxSimilarityLength(smartCacheConfig.getMaxSimilarityLength());
+            SmartCacheStrategy.setEnableSimilarityMatching(smartCacheConfig.isEnableSimilarityMatching());
+            logger.debug("SmartCacheStrategy配置已应用: similarityThreshold={}, maxSimilarityLength={}, enableSimilarityMatching={}", 
+                smartCacheConfig.getSimilarityThreshold(), 
+                smartCacheConfig.getMaxSimilarityLength(), 
+                smartCacheConfig.isEnableSimilarityMatching());
         }
+        
+        Map<SmartCacheStrategy.RequestType, CacheConfig> cacheConfigs = new ConcurrentHashMap<>();
+        cacheConfigs.put(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, 
+            toCacheConfig(config.getCache().getComprehendChunk()));
+        cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, 
+            toCacheConfig(config.getCache().getGenerateSummary()));
+        cacheConfigs.put(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, 
+            toCacheConfig(config.getCache().getClusterDocuments()));
+        cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, 
+            toCacheConfig(config.getCache().getExtractKeywords()));
+        cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, 
+            toCacheConfig(config.getCache().getExtractEntities()));
+        cacheConfigs.put(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, 
+            toCacheConfig(config.getCache().getGenerateExampleQuestions()));
+        cacheConfigs.put(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION,
+            toCacheConfig(config.getCache().getDecideNavigation()));
+        cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS,
+            toCacheConfig(config.getCache().getExtractKeywords()));
+
+        CachedLLMProvider provider = new CachedLLMProvider(delegate, cacheConfigs);
+        // 设置相似性搜索的最大条目数
+        provider.setMaxSearchItems(100); // 后续可以从配置文件中读取
+        
+        logger.debug("LLM缓存已启用，配置: {}", config.getCache());
+        return provider;
+    }
+    
+    /**
+     * 将ZeroVectorProperties.CacheConfig转换为CacheConfig
+     */
+    private static CacheConfig toCacheConfig(ZeroVectorProperties.CacheConfig config) {
+        TimeUnit timeUnit = TimeUnit.valueOf(config.getTimeUnit().toUpperCase());
+        return new CacheConfig(config.getMaxSize(), config.getExpireAfterAccess(), timeUnit, true, "");
     }
 
     /**

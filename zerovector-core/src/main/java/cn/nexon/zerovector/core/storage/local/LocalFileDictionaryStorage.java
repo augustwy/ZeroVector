@@ -107,7 +107,7 @@ public class LocalFileDictionaryStorage implements DictionaryStorage {
             return;
         }
 
-        dictionary.getKeywordDefinition(keyword);
+        dictionary.removeKeywordDefinition(keyword);
         logger.debug("删除关键词定义: {}", keyword);
     }
 
@@ -131,7 +131,9 @@ public class LocalFileDictionaryStorage implements DictionaryStorage {
             return;
         }
 
-        dictionary.addEntries(nodeIds, keyword);
+        for (String nodeId : nodeIds) {
+            dictionary.addEntry(keyword, nodeId, 1.0);
+        }
         logger.debug("批量添加倒排索引条目: {} -> {} 个节点", keyword, nodeIds.size());
     }
 

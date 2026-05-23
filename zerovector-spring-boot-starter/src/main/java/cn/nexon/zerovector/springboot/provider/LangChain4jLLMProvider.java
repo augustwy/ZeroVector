@@ -2,13 +2,16 @@ package cn.nexon.zerovector.springboot.provider;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
+import cn.nexon.zerovector.core.util.MD5Util;
 import cn.nexon.zerovector.springboot.autoconfigure.ZeroVectorProperties;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+import java.util.concurrent.TimeUnit;
 
 public class LangChain4jLLMProvider implements LLMProvider {
 
@@ -17,7 +20,10 @@ public class LangChain4jLLMProvider implements LLMProvider {
     private final ChatLanguageModel chatModel;
     private final ZeroVectorProperties.LangChain4j config;
 
-    private final Map<String, String> summaryCache = new ConcurrentHashMap<>();
+    private final Cache<String, String> summaryCache = Caffeine.newBuilder()
+            .maximumSize(1000)
+            .expireAfterAccess(30, TimeUnit.MINUTES)
+            .build();
 
     public LangChain4jLLMProvider(ChatLanguageModel chatModel, ZeroVectorProperties.LangChain4j config) {
         this.chatModel = chatModel;
@@ -42,9 +48,10 @@ public class LangChain4jLLMProvider implements LLMProvider {
 
     @Override
     public LLMResponse generateSummary(String prompt) {
-        String cacheKey = "summary_" + java.util.Objects.hash(prompt);
-        if (summaryCache.containsKey(cacheKey)) {
-            return LLMResponse.success(summaryCache.get(cacheKey), 0, 0, 0);
+        String cacheKey = "summary_" + MD5Util.calculateMD5(prompt);
+        String cached = summaryCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            return LLMResponse.success(cached, 0, 0, 0);
         }
 
         long startTime = System.currentTimeMillis();

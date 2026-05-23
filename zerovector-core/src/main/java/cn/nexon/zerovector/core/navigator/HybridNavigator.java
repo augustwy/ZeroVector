@@ -16,6 +16,8 @@ import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -35,7 +37,8 @@ public class HybridNavigator {
     private final LLMProvider llm;
     private final MMapDocumentStore store;
     private final HookExecutor hookExecutor;
-    
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, MMapDocumentStore store) {
         this(tree, dictionary, llm, store, new DefaultHookExecutor());
     }
@@ -350,8 +353,7 @@ public class HybridNavigator {
     
     private NavigationAction parseNavigationResponse(String response, List<TreeNode> childNodes) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            NavigationDecisionResult result = objectMapper.readValue(response, NavigationDecisionResult.class);
+            NavigationDecisionResult result = OBJECT_MAPPER.readValue(response, NavigationDecisionResult.class);
             
             if (result.selectedIndex() >= 0 && result.selectedIndex() < childNodes.size()) {
                 TreeNode selectedNode = childNodes.get(result.selectedIndex());

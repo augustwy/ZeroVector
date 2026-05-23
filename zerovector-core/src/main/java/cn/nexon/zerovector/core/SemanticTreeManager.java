@@ -41,7 +41,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -297,8 +297,8 @@ public class SemanticTreeManager {
     }
 
     private DocumentProcessingResult processDocuments(List<Document> documents) {
-        Map<String, DocumentComprehendResult> comprehendResultMap = new HashMap<>();
-        Map<String, DocumentChunk> chunkMap = new HashMap<>();
+        Map<String, DocumentComprehendResult> comprehendResultMap = new LinkedHashMap<>();
+        Map<String, DocumentChunk> chunkMap = new LinkedHashMap<>();
 
         for (Document document : documents) {
             logger.debug("  - {}: {}", document.id(), document.title());
@@ -441,12 +441,12 @@ public class SemanticTreeManager {
     private DocumentProcessingResult processSingleDocument(Document document) {
         DocumentComprehendResult result = documentComprehender.comprehend(document);
 
-        Map<String, DocumentComprehendResult> comprehendResultMap = new HashMap<>();
+        Map<String, DocumentComprehendResult> comprehendResultMap = new LinkedHashMap<>();
         comprehendResultMap.put(document.id(), result);
 
         DocumentChunk chunk = createDocumentChunk(document, result);
 
-        Map<String, DocumentChunk> chunkMap = new HashMap<>();
+        Map<String, DocumentChunk> chunkMap = new LinkedHashMap<>();
         chunkMap.put(document.id(), chunk);
 
         return new DocumentProcessingResult(comprehendResultMap, chunkMap);

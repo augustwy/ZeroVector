@@ -1,3 +1,6 @@
+server:
+  port: 8081
+
 spring:
   ai:
     model:
@@ -11,7 +14,6 @@ spring:
 # ZeroVector配置
 zerovector:
   enabled: true
-  storage-path: ./data/zerovector_storage
   use-sharded-storage: true
   shard-size: 100
   model:

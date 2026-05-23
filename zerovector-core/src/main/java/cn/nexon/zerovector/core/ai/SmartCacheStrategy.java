@@ -1,12 +1,64 @@
 package cn.nexon.zerovector.core.ai;
 
-import java.util.Objects;
+import cn.nexon.zerovector.core.util.MD5Util;
 
 public class SmartCacheStrategy {
     
-    private static final double SIMILARITY_THRESHOLD = 0.85;
-    private static final int MAX_SIMILARITY_LENGTH = 500;
-    private static final boolean ENABLE_SIMILARITY_MATCHING = true;
+    private static volatile double SIMILARITY_THRESHOLD = 0.85;
+    private static volatile int MAX_SIMILARITY_LENGTH = 500;
+    private static volatile boolean ENABLE_SIMILARITY_MATCHING = true;
+    
+    /**
+     * 设置相似性阈值
+     * @param threshold 相似性阈值，范围0-1
+     */
+    public static void setSimilarityThreshold(double threshold) {
+        if (threshold >= 0 && threshold <= 1) {
+            SIMILARITY_THRESHOLD = threshold;
+        }
+    }
+    
+    /**
+     * 设置最大相似性匹配长度
+     * @param length 最大长度
+     */
+    public static void setMaxSimilarityLength(int length) {
+        if (length > 0) {
+            MAX_SIMILARITY_LENGTH = length;
+        }
+    }
+    
+    /**
+     * 设置是否启用相似性匹配
+     * @param enabled 是否启用
+     */
+    public static void setEnableSimilarityMatching(boolean enabled) {
+        ENABLE_SIMILARITY_MATCHING = enabled;
+    }
+    
+    /**
+     * 获取相似性阈值
+     * @return 相似性阈值
+     */
+    public static double getSimilarityThreshold() {
+        return SIMILARITY_THRESHOLD;
+    }
+    
+    /**
+     * 获取最大相似性匹配长度
+     * @return 最大长度
+     */
+    public static int getMaxSimilarityLength() {
+        return MAX_SIMILARITY_LENGTH;
+    }
+    
+    /**
+     * 获取是否启用相似性匹配
+     * @return 是否启用
+     */
+    public static boolean isEnableSimilarityMatching() {
+        return ENABLE_SIMILARITY_MATCHING;
+    }
     
     public enum RequestType {
         COMPREHEND_CHUNK,
@@ -15,7 +67,8 @@ public class SmartCacheStrategy {
         EXTRACT_KEYWORDS,
         EXTRACT_ENTITIES,
         GENERATE_EXAMPLE_QUESTIONS,
-        DECIDE_NAVIGATION
+        DECIDE_NAVIGATION,
+        EXTRACT_QUERY_KEYWORDS
     }
     
     public static String generateCacheKey(RequestType type, String prompt) {
@@ -30,7 +83,7 @@ public class SmartCacheStrategy {
         if (prompt == null) {
             return "null";
         }
-        return String.valueOf(Objects.hash(prompt));
+        return MD5Util.calculateMD5(prompt);
     }
     
     public static boolean isSimilarPrompt(String prompt1, String prompt2) {
@@ -66,6 +119,12 @@ public class SmartCacheStrategy {
         if (s1.isEmpty() && s2.isEmpty()) return 1.0;
         if (s1.isEmpty() || s2.isEmpty()) return 0.0;
         
+        // 对长文本进行摘要处理，提高计算效率
+        if (s1.length() > MAX_SIMILARITY_LENGTH || s2.length() > MAX_SIMILARITY_LENGTH) {
+            s1 = summarizeText(s1, MAX_SIMILARITY_LENGTH);
+            s2 = summarizeText(s2, MAX_SIMILARITY_LENGTH);
+        }
+        
         int maxLength = Math.max(s1.length(), s2.length());
         int distance = levenshteinDistance(s1, s2);
         
@@ -73,26 +132,39 @@ public class SmartCacheStrategy {
     }
     
     private static int levenshteinDistance(String s1, String s2) {
-        int[][] dp = new int[s1.length() + 1][s2.length() + 1];
+        // 优化：使用一维数组减少空间复杂度
+        int[] prev = new int[s2.length() + 1];
+        int[] curr = new int[s2.length() + 1];
         
-        for (int i = 0; i <= s1.length(); i++) {
-            dp[i][0] = i;
-        }
         for (int j = 0; j <= s2.length(); j++) {
-            dp[0][j] = j;
+            prev[j] = j;
         }
         
         for (int i = 1; i <= s1.length(); i++) {
+            curr[0] = i;
             for (int j = 1; j <= s2.length(); j++) {
                 int cost = s1.charAt(i - 1) == s2.charAt(j - 1) ? 0 : 1;
-                dp[i][j] = Math.min(
-                    Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1),
-                    dp[i - 1][j - 1] + cost
+                curr[j] = Math.min(
+                    Math.min(curr[j - 1] + 1, prev[j] + 1),
+                    prev[j - 1] + cost
                 );
             }
+            int[] temp = prev;
+            prev = curr;
+            curr = temp;
         }
         
-        return dp[s1.length()][s2.length()];
+        return prev[s2.length()];
+    }
+    
+    private static String summarizeText(String text, int maxLength) {
+        if (text.length() <= maxLength) {
+            return text;
+        }
+        
+        // 简单摘要算法：取文本开头和结尾的部分
+        int half = maxLength / 2;
+        return text.substring(0, half) + "..." + text.substring(text.length() - half);
     }
     
     public static CacheConfig getConfigForType(RequestType type) {
@@ -104,6 +176,7 @@ public class SmartCacheStrategy {
             case EXTRACT_ENTITIES -> CacheConfig.DEFAULT_ENTITIES;
             case GENERATE_EXAMPLE_QUESTIONS -> CacheConfig.DEFAULT_QUESTIONS;
             case DECIDE_NAVIGATION -> CacheConfig.DEFAULT_NAVIGATION;
+            case EXTRACT_QUERY_KEYWORDS -> CacheConfig.DEFAULT_KEYWORDS;
         };
     }
 }
