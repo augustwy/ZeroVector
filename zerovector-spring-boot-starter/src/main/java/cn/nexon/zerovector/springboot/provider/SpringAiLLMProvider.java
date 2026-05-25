@@ -34,8 +34,8 @@ public class SpringAiLLMProvider implements LLMProvider {
         ChatOptions.Builder builder = ChatOptions.builder();
         if (model.maxTokens() > 0) builder.maxTokens(model.maxTokens());
         builder.temperature(model.temperature() >= 0 ? model.temperature() : 0.7);
-        this.clusteringClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.clustering()).build()).build();
-        this.navigationClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.navigation()).build()).build();
+        this.clusteringClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.clustering())).build();
+        this.navigationClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.navigation())).build();
     }
 
     @Override

@@ -13,10 +13,8 @@ import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
 import cn.nexon.zerovector.springboot.SemanticHub;
 import cn.nexon.zerovector.springboot.provider.LangChain4jLLMProvider;
 import cn.nexon.zerovector.springboot.provider.SpringAiLLMProvider;
-import dev.langchain4j.model.chat.ChatLanguageModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -43,12 +41,12 @@ public class ZeroVectorAutoConfiguration {
 
     // 检测到 Spring AI 类路径
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(ChatModel.class)
+    @ConditionalOnClass(org.springframework.ai.chat.model.ChatModel.class)
     static class SpringAiConfiguration {
 
         @Bean
         @ConditionalOnMissingBean(name = "springAiLLMService")
-        LLMProvider springAiLLMService(ChatModel chatModel, ZeroVectorProperties config) {
+        LLMProvider springAiLLMService(org.springframework.ai.chat.model.ChatModel chatModel, ZeroVectorProperties config) {
             return new SpringAiLLMProvider(chatModel, config.getModel());
         }
 
@@ -61,13 +59,13 @@ public class ZeroVectorAutoConfiguration {
     
     // 检测到 Langchain4j 类路径
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(ChatLanguageModel.class)
+    @ConditionalOnClass(dev.langchain4j.model.chat.ChatModel.class)
     static class Langchain4jConfiguration {
 
         @Bean
         @ConditionalOnMissingBean(name = "langChain4jLLMService")
-        LLMProvider langChain4jLLMService(ChatLanguageModel chatLanguageModel, ZeroVectorProperties config) {
-            return new LangChain4jLLMProvider(chatLanguageModel, config.getLangChain4j());
+        LLMProvider langChain4jLLMService(dev.langchain4j.model.chat.ChatModel chatModel, ZeroVectorProperties config) {
+            return new LangChain4jLLMProvider(chatModel, config.getLangChain4j());
         }
 
         @Bean

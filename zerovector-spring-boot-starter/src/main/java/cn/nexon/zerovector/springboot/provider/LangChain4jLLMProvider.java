@@ -4,7 +4,7 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.util.MD5Util;
 import cn.nexon.zerovector.springboot.autoconfigure.ZeroVectorProperties;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +17,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(LangChain4jLLMProvider.class);
 
-    private final ChatLanguageModel chatModel;
+    private final ChatModel chatModel;
     private final ZeroVectorProperties.LangChain4j config;
 
     private final Cache<String, String> summaryCache = Caffeine.newBuilder()
@@ -25,7 +25,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
             .expireAfterAccess(30, TimeUnit.MINUTES)
             .build();
 
-    public LangChain4jLLMProvider(ChatLanguageModel chatModel, ZeroVectorProperties.LangChain4j config) {
+    public LangChain4jLLMProvider(ChatModel chatModel, ZeroVectorProperties.LangChain4j config) {
         this.chatModel = chatModel;
         this.config = config;
     }
@@ -34,7 +34,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
     public LLMResponse comprehendChunk(String prompt) {
         long startTime = System.currentTimeMillis();
         try {
-            String result = chatModel.generate(prompt);
+            String result = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             logger.debug("LLM原始响应: {}", result);
@@ -56,7 +56,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
 
         long startTime = System.currentTimeMillis();
         try {
-            String summary = chatModel.generate(prompt);
+            String summary = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             summaryCache.put(cacheKey, summary);
@@ -72,7 +72,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
     public LLMResponse clusterDocuments(String prompt) {
         long startTime = System.currentTimeMillis();
         try {
-            String result = chatModel.generate(prompt);
+            String result = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             return LLMResponse.success(result, duration);
@@ -87,7 +87,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
     public LLMResponse extractKeywords(String prompt) {
         long startTime = System.currentTimeMillis();
         try {
-            String result = chatModel.generate(prompt);
+            String result = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             return LLMResponse.success(result, duration);
@@ -102,7 +102,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
     public LLMResponse extractEntities(String prompt) {
         long startTime = System.currentTimeMillis();
         try {
-            String result = chatModel.generate(prompt);
+            String result = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             return LLMResponse.success(result, duration);
@@ -117,7 +117,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
     public LLMResponse generateExampleQuestions(String prompt) {
         long startTime = System.currentTimeMillis();
         try {
-            String result = chatModel.generate(prompt);
+            String result = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             return LLMResponse.success(result, duration);
@@ -132,7 +132,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
     public LLMResponse decideNavigation(String prompt) {
         long startTime = System.currentTimeMillis();
         try {
-            String result = chatModel.generate(prompt);
+            String result = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             logger.debug("LLM原始响应: {}", result);
@@ -148,7 +148,7 @@ public class LangChain4jLLMProvider implements LLMProvider {
     public LLMResponse extractQueryKeywords(String prompt) {
         long startTime = System.currentTimeMillis();
         try {
-            String result = chatModel.generate(prompt);
+            String result = chatModel.chat(prompt);
             long duration = System.currentTimeMillis() - startTime;
             
             return LLMResponse.success(result, duration);
