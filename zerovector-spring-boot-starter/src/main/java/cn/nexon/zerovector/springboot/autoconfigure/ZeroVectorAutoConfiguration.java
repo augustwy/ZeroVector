@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -49,12 +50,6 @@ public class ZeroVectorAutoConfiguration {
         LLMProvider springAiLLMService(org.springframework.ai.chat.model.ChatModel chatModel, ZeroVectorProperties config) {
             return new SpringAiLLMProvider(chatModel, config.getModel());
         }
-
-        @Bean
-        @ConditionalOnMissingBean(LLMProvider.class)
-        LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
-            return createCachedLLMProvider(delegate, config);
-        }
     }
     
     // 检测到 Langchain4j 类路径
@@ -65,16 +60,21 @@ public class ZeroVectorAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(name = "langChain4jLLMService")
         LLMProvider langChain4jLLMService(dev.langchain4j.model.chat.ChatModel chatModel, ZeroVectorProperties config) {
-            return new LangChain4jLLMProvider(chatModel, config.getLangChain4j());
+            return new LangChain4jLLMProvider(chatModel);
         }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnBean(LLMProvider.class)
+    static class CachedLLMConfiguration {
 
         @Bean
-        @ConditionalOnMissingBean(LLMProvider.class)
+        @ConditionalOnMissingBean(name = "cachedLLMProvider")
         LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
             return createCachedLLMProvider(delegate, config);
         }
     }
-    
+
     /**
      * 创建缓存的LLM提供者
      */
@@ -126,8 +126,7 @@ public class ZeroVectorAutoConfiguration {
      * 将ZeroVectorProperties.CacheConfig转换为CacheConfig
      */
     private static CacheConfig toCacheConfig(ZeroVectorProperties.CacheConfig config) {
-        TimeUnit timeUnit = TimeUnit.valueOf(config.getTimeUnit().toUpperCase());
-        return new CacheConfig(config.getMaxSize(), config.getExpireAfterAccess(), timeUnit, true, "");
+        return new CacheConfig(config.getMaxSize(), config.getExpireAfterAccess(), config.getTimeUnit(), true, "");
     }
 
     /**

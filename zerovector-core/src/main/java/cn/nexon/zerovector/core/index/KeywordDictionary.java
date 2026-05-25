@@ -111,18 +111,7 @@ public final class KeywordDictionary {
      * @return 节点ID到得分的映射表
      */
     public Map<String, Double> matchCandidates(String query) {
-        Map<String, Double> candidateScores = new HashMap<>();
-        
-        Arrays.stream(query.split("\\s+"))
-            .filter(invertedIndex::containsKey)
-            .forEach(kw -> {
-                double weight = keywordWeights.getOrDefault(kw, 1.0);
-                invertedIndex.get(kw).forEach(nodeId -> 
-                    candidateScores.merge(nodeId, weight, Double::sum)
-                );
-            });
-            
-        return candidateScores;
+        return matchCandidatesFromKeywords(List.of(query.split("\\s+")));
     }
 
     /**

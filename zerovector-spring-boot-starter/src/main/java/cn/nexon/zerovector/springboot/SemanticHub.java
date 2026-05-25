@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -172,16 +173,6 @@ public class SemanticHub {
     }
     
     /**
-     * 获取搜索结果
-     *
-     * @param query 查询字符串
-     * @return 搜索结果
-     */
-    public SearchResult getSearchResult(String query) {
-        return search(query);
-    }
-    
-    /**
      * 创建知识库
      *
      * @param name 知识库名称
@@ -247,106 +238,45 @@ public class SemanticHub {
         return knowledgeBaseManager.getKnowledgeBase(knowledgeBaseName);
     }
     
-    /**
-     * 清除所有缓存
-     */
+    private Optional<CachedLLMProvider> getCachedProvider() {
+        return knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cp
+            ? Optional.of(cp) : Optional.empty();
+    }
+
     public void clearCache() {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            cachedProvider.clearCache();
-        }
+        getCachedProvider().ifPresent(CachedLLMProvider::clearCache);
     }
-    
-    /**
-     * 清除指定类型的缓存
-     *
-     * @param type 缓存类型
-     */
+
     public void clearCache(SmartCacheStrategy.RequestType type) {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            cachedProvider.clearCache(type);
-        }
+        getCachedProvider().ifPresent(cp -> cp.clearCache(type));
     }
-    
-    /**
-     * 获取所有缓存统计
-     *
-     * @return 缓存统计映射
-     */
+
     public Map<SmartCacheStrategy.RequestType, CacheStatistics> getCacheStatistics() {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            return cachedProvider.getStatistics();
-        }
-        return Map.of();
+        return getCachedProvider().map(CachedLLMProvider::getStatistics).orElse(Map.of());
     }
-    
-    /**
-     * 获取指定类型的缓存统计
-     *
-     * @param type 缓存类型
-     * @return 缓存统计
-     */
+
     public CacheStatistics getCacheStatistics(SmartCacheStrategy.RequestType type) {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            return cachedProvider.getStatistics(type);
-        }
-        return null;
+        return getCachedProvider().map(cp -> cp.getStatistics(type)).orElse(null);
     }
-    
-    /**
-     * 预热缓存
-     *
-     * @param warmupPrompts 预热提示词映射
-     */
+
     public void warmupCache(Map<SmartCacheStrategy.RequestType, List<String>> warmupPrompts) {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            cachedProvider.warmupCache(warmupPrompts);
-        }
+        getCachedProvider().ifPresent(cp -> cp.warmupCache(warmupPrompts));
     }
-    
-    /**
-     * 更新缓存配置
-     *
-     * @param type 缓存类型
-     * @param config 缓存配置
-     */
+
     public void updateCacheConfig(SmartCacheStrategy.RequestType type, CacheConfig config) {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            cachedProvider.updateCacheConfig(type, config);
-        }
+        getCachedProvider().ifPresent(cp -> cp.updateCacheConfig(type, config));
     }
-    
-    /**
-     * 获取总缓存大小
-     *
-     * @return 缓存大小
-     */
+
     public long getTotalCacheSize() {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            return cachedProvider.getTotalCacheSize();
-        }
-        return 0;
+        return getCachedProvider().map(CachedLLMProvider::getTotalCacheSize).orElse(0L);
     }
-    
-    /**
-     * 获取指定类型的缓存大小
-     *
-     * @param type 缓存类型
-     * @return 缓存大小
-     */
+
     public long getCacheSize(SmartCacheStrategy.RequestType type) {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            return cachedProvider.getCacheSize(type);
-        }
-        return 0;
+        return getCachedProvider().map(cp -> cp.getCacheSize(type)).orElse(0L);
     }
-    
-    /**
-     * 记录缓存统计日志
-     */
+
     public void logCacheStatistics() {
-        if (knowledgeBaseManager.getLlmProvider() instanceof CachedLLMProvider cachedProvider) {
-            cachedProvider.logStatistics();
-        }
+        getCachedProvider().ifPresent(CachedLLMProvider::logStatistics);
     }
     
     /**

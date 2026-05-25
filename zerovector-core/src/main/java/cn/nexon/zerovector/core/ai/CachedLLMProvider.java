@@ -29,7 +29,9 @@ public class CachedLLMProvider implements LLMProvider {
     private final Map<SmartCacheStrategy.RequestType, CacheConfig> configs;
     /** 相似提示词缓存，用于相似性匹配（大小受限，自动淘汰） */
     private final Map<String, String> similarPromptCache;
-    
+    /** 请求类型到委托方法的调度表 */
+    private final Map<SmartCacheStrategy.RequestType, Function<String, LLMResponse>> dispatcher;
+
     /**
      * 创建缓存LLM提供者
      * @param delegate 委托的LLM提供者
@@ -37,7 +39,7 @@ public class CachedLLMProvider implements LLMProvider {
     public CachedLLMProvider(LLMProvider delegate) {
         this(delegate, getDefaultConfigs());
     }
-    
+
     /**
      * 创建缓存LLM提供者
      * @param delegate 委托的LLM提供者
@@ -52,7 +54,18 @@ public class CachedLLMProvider implements LLMProvider {
                 .maximumSize(1000)
                 .<String, String>build()
                 .asMap();
-        
+
+        this.dispatcher = Map.of(
+            SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, delegate::comprehendChunk,
+            SmartCacheStrategy.RequestType.GENERATE_SUMMARY, delegate::generateSummary,
+            SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, delegate::clusterDocuments,
+            SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, delegate::extractKeywords,
+            SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, delegate::extractEntities,
+            SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, delegate::generateExampleQuestions,
+            SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, delegate::decideNavigation,
+            SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS, delegate::extractQueryKeywords
+        );
+
         initializeCaches();
     }
     
@@ -187,50 +200,42 @@ public class CachedLLMProvider implements LLMProvider {
     
     @Override
     public LLMResponse comprehendChunk(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, prompt, 
-            p -> delegate.comprehendChunk(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.COMPREHEND_CHUNK, prompt, delegate::comprehendChunk);
     }
-    
+
     @Override
     public LLMResponse generateSummary(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, prompt, 
-            p -> delegate.generateSummary(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.GENERATE_SUMMARY, prompt, delegate::generateSummary);
     }
-    
+
     @Override
     public LLMResponse clusterDocuments(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, prompt, 
-            p -> delegate.clusterDocuments(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS, prompt, delegate::clusterDocuments);
     }
-    
+
     @Override
     public LLMResponse extractKeywords(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, prompt, 
-            p -> delegate.extractKeywords(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS, prompt, delegate::extractKeywords);
     }
-    
+
     @Override
     public LLMResponse extractEntities(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, prompt, 
-            p -> delegate.extractEntities(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_ENTITIES, prompt, delegate::extractEntities);
     }
-    
+
     @Override
     public LLMResponse generateExampleQuestions(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, prompt, 
-            p -> delegate.generateExampleQuestions(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS, prompt, delegate::generateExampleQuestions);
     }
-    
+
     @Override
     public LLMResponse decideNavigation(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, prompt, 
-            p -> delegate.decideNavigation(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION, prompt, delegate::decideNavigation);
     }
 
     @Override
     public LLMResponse extractQueryKeywords(String prompt) {
-        return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS, prompt,
-            p -> delegate.extractQueryKeywords(p));
+        return getCachedResult(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS, prompt, delegate::extractQueryKeywords);
     }
     
     /**
@@ -297,16 +302,7 @@ public class CachedLLMProvider implements LLMProvider {
                 try {
                     String cacheKey = SmartCacheStrategy.generateCacheKey(type, prompt);
                     if (!cache.asMap().containsKey(cacheKey)) {
-                        LLMResponse result = switch (type) {
-                            case COMPREHEND_CHUNK -> delegate.comprehendChunk(prompt);
-                            case GENERATE_SUMMARY -> delegate.generateSummary(prompt);
-                            case CLUSTER_DOCUMENTS -> delegate.clusterDocuments(prompt);
-                            case EXTRACT_KEYWORDS -> delegate.extractKeywords(prompt);
-                            case EXTRACT_ENTITIES -> delegate.extractEntities(prompt);
-                            case GENERATE_EXAMPLE_QUESTIONS -> delegate.generateExampleQuestions(prompt);
-                            case DECIDE_NAVIGATION -> delegate.decideNavigation(prompt);
-                            case EXTRACT_QUERY_KEYWORDS -> delegate.extractQueryKeywords(prompt);
-                        };
+                        LLMResponse result = dispatcher.get(type).apply(prompt);
                         cache.put(cacheKey, result);
                         similarPromptCache.put(cacheKey, prompt);
                         successCount++;

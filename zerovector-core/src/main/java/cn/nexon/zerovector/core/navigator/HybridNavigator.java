@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -48,7 +49,7 @@ public class HybridNavigator {
         this.dictionary = dictionary;
         this.llm = llm;
         this.store = store;
-        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
+        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
     }
     
     /**
@@ -69,16 +70,20 @@ public class HybridNavigator {
                 String keywordsPrompt = LLMPromptTemplates.extractQueryKeywords(query);
                 LLMResponse keywordsResponse = llm.extractQueryKeywords(keywordsPrompt);
                 stats.add(keywordsResponse);
-                
+
                 List<String> extractedKeywords = parseKeywordsResponse(keywordsResponse.content());
-                
+
                 if (!extractedKeywords.isEmpty()) {
                     Map<String, Double> candidates = dictionary.matchCandidatesFromKeywords(extractedKeywords);
                     if (!candidates.isEmpty()) {
                         fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
                     }
                 }
-            } catch (Exception e) {
+            } catch (PromptLoadException e) {
+                // LLM调用失败，降级到字典匹配
+            }
+
+            if (fastTrackNodeId == null) {
                 Map<String, Double> candidates = dictionary.matchCandidates(query);
                 if (!candidates.isEmpty()) {
                     fastTrackNodeId = Collections.max(candidates.entrySet(), Map.Entry.comparingByValue()).getKey();
@@ -305,50 +310,37 @@ public class HybridNavigator {
     
     private List<DocumentChunk> loadChunks(List<String> chunkIds) {
         return chunkIds.stream()
-            .map(chunkId -> {
-                DocumentChunk chunk = tree.getChunk(chunkId);
-                if (chunk == null) {
-                    String content = store.getChunk(chunkId);
-                    if (content != null) {
-                        return DocumentChunk.withContent(chunkId, content, null, Map.of());
-                    }
-                    return null;
-                }
-                
-                if (chunk.isFilePathBased()) {
-                    try {
-                        String content = store.getChunkContent(chunk);
-                        return new DocumentChunk(
-                            chunk.id(),
-                            content,
-                            chunk.summary(),
-                            chunk.filePath(),
-                            chunk.md5(),
-                            chunk.metadata()
-                        );
-                    } catch (Exception e) {
-                        return chunk;
-                    }
-                }
-                
-                if (chunk.content() == null || chunk.content().isEmpty()) {
-                    String content = store.getChunk(chunkId);
-                    if (content != null) {
-                        return new DocumentChunk(
-                            chunk.id(),
-                            content,
-                            chunk.summary(),
-                            chunk.filePath(),
-                            chunk.md5(),
-                            chunk.metadata()
-                        );
-                    }
-                }
-                
-                return chunk;
-            })
+            .map(this::resolveChunk)
             .filter(java.util.Objects::nonNull)
             .collect(Collectors.toList());
+    }
+
+    private DocumentChunk resolveChunk(String chunkId) {
+        DocumentChunk chunk = tree.getChunk(chunkId);
+        if (chunk == null) {
+            String content = store.getChunk(chunkId);
+            return content != null ? DocumentChunk.withContent(chunkId, content, null, Map.of()) : null;
+        }
+
+        if (chunk.isFilePathBased()) {
+            try {
+                String content = store.getChunkContent(chunk);
+                return new DocumentChunk(chunk.id(), content, chunk.summary(),
+                    chunk.filePath(), chunk.md5(), chunk.metadata());
+            } catch (Exception e) {
+                return chunk;
+            }
+        }
+
+        if (chunk.content() == null || chunk.content().isEmpty()) {
+            String content = store.getChunk(chunkId);
+            if (content != null) {
+                return new DocumentChunk(chunk.id(), content, chunk.summary(),
+                    chunk.filePath(), chunk.md5(), chunk.metadata());
+            }
+        }
+
+        return chunk;
     }
     
     private NavigationAction parseNavigationResponse(String response, List<TreeNode> childNodes) {
@@ -385,5 +377,4 @@ public class HybridNavigator {
         return keywords;
     }
     
-    private record NavigationDecisionResult(int selectedIndex, String reasoning, double confidence) {}
 }

@@ -13,6 +13,7 @@ import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.KeywordDefinition;
 import cn.nexon.zerovector.core.util.FileUtils;
+import java.util.Objects;
 import cn.nexon.zerovector.core.util.JsonUtils;
 import cn.nexon.zerovector.core.util.MmapUtils;
 import org.slf4j.Logger;
@@ -26,6 +27,7 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 文档理解器
@@ -46,7 +48,7 @@ public class DocumentComprehender {
     public DocumentComprehender(LLMProvider llmProvider, int maxChunkSize, HookExecutor hookExecutor) {
         this.llmProvider = llmProvider;
         this.maxChunkSize = maxChunkSize;
-        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
+        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
     }
 
     /**
@@ -327,15 +329,11 @@ public class DocumentComprehender {
         }
 
         if (!previousKeywords.isEmpty()) {
-            context.append("前文关键词：");
-            for (int i = 0; i < Math.min(previousKeywords.size(), 5); i++) {
-                KeywordDefinition kd = previousKeywords.get(i);
-                context.append(kd.keyword()).append("（").append(kd.definition()).append("）");
-                if (i < Math.min(previousKeywords.size(), 5) - 1) {
-                    context.append("、");
-                }
-            }
-            context.append("\n\n");
+            String joined = previousKeywords.stream()
+                .limit(5)
+                .map(kd -> kd.keyword() + "（" + kd.definition() + "）")
+                .collect(Collectors.joining("、"));
+            context.append("前文关键词：").append(joined).append("\n\n");
         }
 
         context.append("当前内容：").append(currentChunk);

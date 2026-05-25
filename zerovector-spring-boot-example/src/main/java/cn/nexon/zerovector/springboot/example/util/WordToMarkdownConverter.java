@@ -143,41 +143,34 @@ public class WordToMarkdownConverter {
             return 0;
         }
 
-        String lowerStyleId = styleId.toLowerCase();
-        if (lowerStyleId.startsWith("heading") || lowerStyleId.startsWith("标题")) {
-            try {
-                String numPart = lowerStyleId.replaceAll("[^0-9]", "");
-                if (!numPart.isEmpty()) {
-                    return Integer.parseInt(numPart);
-                }
-                return 1;
-            } catch (NumberFormatException e) {
-                return 1;
-            }
+        int level = extractHeadingNumber(styleId);
+        if (level > 0) {
+            return level;
         }
 
         if (styles != null) {
             XWPFStyle style = styles.getStyle(styleId);
             if (style != null) {
-                String name = style.getName();
-                if (name != null) {
-                    String lowerName = name.toLowerCase();
-                    if (lowerName.contains("heading") || lowerName.contains("标题")) {
-                        try {
-                            String numPart = lowerName.replaceAll("[^0-9]", "");
-                            if (!numPart.isEmpty()) {
-                                return Integer.parseInt(numPart);
-                            }
-                            return 1;
-                        } catch (NumberFormatException e) {
-                            return 1;
-                        }
-                    }
+                level = extractHeadingNumber(style.getName());
+                if (level > 0) {
+                    return level;
                 }
             }
         }
 
         return 0;
+    }
+
+    private static int extractHeadingNumber(String name) {
+        if (name == null) return 0;
+        String lower = name.toLowerCase();
+        if (!lower.contains("heading") && !lower.contains("标题")) return 0;
+        try {
+            String numPart = lower.replaceAll("[^0-9]", "");
+            return numPart.isEmpty() ? 1 : Integer.parseInt(numPart);
+        } catch (NumberFormatException e) {
+            return 1;
+        }
     }
 
     /**
@@ -217,9 +210,7 @@ public class WordToMarkdownConverter {
      */
     private static int getIndentLevel(XWPFParagraph paragraph) {
         Integer indent = paragraph.getIndentationLeft();
-        {
-            return Math.min(indent.intValue() / 720, 6);
-        }
+        return indent != null ? Math.min(indent / 720, 6) : 0;
     }
 
     /**

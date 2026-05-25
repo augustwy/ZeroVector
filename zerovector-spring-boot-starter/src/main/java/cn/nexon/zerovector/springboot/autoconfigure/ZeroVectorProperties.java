@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -37,10 +38,6 @@ public class ZeroVectorProperties {
     
     private int shardSize = 100;
     
-    private SpringAi springAi = new SpringAi();
-    
-    private LangChain4j langChain4j = new LangChain4j();
-
     private Model model = new Model("gpt-4o-mini", "gpt-4o", 0.7, -1);
 
     @Valid
@@ -87,22 +84,6 @@ public class ZeroVectorProperties {
         this.shardSize = shardSize;
     }
     
-    public SpringAi getSpringAi() {
-        return springAi;
-    }
-    
-    public void setSpringAi(SpringAi springAi) {
-        this.springAi = springAi;
-    }
-    
-    public LangChain4j getLangChain4j() {
-        return langChain4j;
-    }
-    
-    public void setLangChain4j(LangChain4j langChain4j) {
-        this.langChain4j = langChain4j;
-    }
-
     public Model getModel() {
         return model;
     }
@@ -159,20 +140,6 @@ public class ZeroVectorProperties {
     }
 
     /**
-     * Spring AI配置
-     */
-    public static class SpringAi {
-
-    }
-    
-    /**
-     * LangChain4j配置
-     */
-    public static class LangChain4j {
-
-    }
-
-    /**
      * LLM上下文配置
      */
     public static class LLMContext {
@@ -207,13 +174,13 @@ public class ZeroVectorProperties {
          */
         private SmartCacheStrategyConfig smartCache = new SmartCacheStrategyConfig();
         
-        private CacheConfig comprehendChunk = new CacheConfig(5000L, 4L, "HOURS");
-        private CacheConfig generateSummary = new CacheConfig(2000L, 2L, "HOURS");
-        private CacheConfig clusterDocuments = new CacheConfig(1000L, 6L, "HOURS");
-        private CacheConfig extractKeywords = new CacheConfig(3000L, 8L, "HOURS");
-        private CacheConfig extractEntities = new CacheConfig(3000L, 8L, "HOURS");
-        private CacheConfig generateExampleQuestions = new CacheConfig(2000L, 12L, "HOURS");
-        private CacheConfig decideNavigation = new CacheConfig(5000L, 1L, "HOURS");
+        private CacheConfig comprehendChunk = new CacheConfig(5000L, 4L, TimeUnit.HOURS);
+        private CacheConfig generateSummary = new CacheConfig(2000L, 2L, TimeUnit.HOURS);
+        private CacheConfig clusterDocuments = new CacheConfig(1000L, 6L, TimeUnit.HOURS);
+        private CacheConfig extractKeywords = new CacheConfig(3000L, 8L, TimeUnit.HOURS);
+        private CacheConfig extractEntities = new CacheConfig(3000L, 8L, TimeUnit.HOURS);
+        private CacheConfig generateExampleQuestions = new CacheConfig(2000L, 12L, TimeUnit.HOURS);
+        private CacheConfig decideNavigation = new CacheConfig(5000L, 1L, TimeUnit.HOURS);
 
         public boolean isEnabled() {
             return enabled;
@@ -347,12 +314,12 @@ public class ZeroVectorProperties {
     public static class CacheConfig {
         private long maxSize;
         private long expireAfterAccess;
-        private String timeUnit;
+        private TimeUnit timeUnit;
 
         public CacheConfig() {
         }
 
-        public CacheConfig(long maxSize, long expireAfterAccess, String timeUnit) {
+        public CacheConfig(long maxSize, long expireAfterAccess, TimeUnit timeUnit) {
             this.maxSize = maxSize;
             this.expireAfterAccess = expireAfterAccess;
             this.timeUnit = timeUnit;
@@ -374,11 +341,11 @@ public class ZeroVectorProperties {
             this.expireAfterAccess = expireAfterAccess;
         }
 
-        public String getTimeUnit() {
+        public TimeUnit getTimeUnit() {
             return timeUnit;
         }
 
-        public void setTimeUnit(String timeUnit) {
+        public void setTimeUnit(TimeUnit timeUnit) {
             this.timeUnit = timeUnit;
         }
     }

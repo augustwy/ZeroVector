@@ -43,7 +43,7 @@ public class TreeBuilder {
         this.llmProvider = llmProvider;
         this.dictionary = dictionary;
         this.store = store;
-        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
+        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
     }
 
     /**
@@ -82,20 +82,15 @@ public class TreeBuilder {
      * @param newChunks 新文档的文档块映射表
      * @return 树构建结果，包含更新后的语义树和 LLM 调用统计
      */
-    public TreeBuildResult updateTree(SemanticTree existingTree, List<DocumentComprehendResult> newResults, Map<String, DocumentChunk> newChunks) {
+    public TreeBuildResult updateTree(SemanticTree existingTree, List<DocumentComprehendResult> newResults,
+                                       Map<String, DocumentChunk> newChunks) {
         long startTime = System.currentTimeMillis();
         LLMUsageStats stats = new LLMUsageStats();
-        
+
         if (existingTree == null || existingTree.rootNode() == null) {
-            Map<String, DocumentComprehendResult> resultMap = new HashMap<>();
-            for (int i = 0; i < newResults.size(); i++) {
-                DocumentComprehendResult result = newResults.get(i);
-                String chunkId = new ArrayList<>(newChunks.keySet()).get(i);
-                resultMap.put(chunkId, result);
-            }
-            return build(resultMap, newChunks);
+            return buildNewTree(newResults, newChunks);
         }
-        
+
         Map<String, TreeNode> updatedNodes = new HashMap<>(existingTree.nodes());
         Map<String, DocumentChunk> updatedChunks = new HashMap<>(existingTree.chunks());
         updatedChunks.putAll(newChunks);
@@ -104,142 +99,28 @@ public class TreeBuilder {
         TreeNode currentRoot = existingTree.rootNode();
 
         for (int i = 0; i < newResults.size(); i++) {
+            if (i >= chunkEntries.size()) break;
             DocumentComprehendResult result = newResults.get(i);
-            if (i >= chunkEntries.size()) {
-                continue;
-            }
             Map.Entry<String, DocumentChunk> entry = chunkEntries.get(i);
             String chunkId = entry.getKey();
-            DocumentChunk chunk = entry.getValue();
-            
+
             stats.merge(result.llmUsageStats());
-            
             TreeNode targetNode = findBestNodeForDocument(currentRoot, existingTree, result);
-            
-            if (targetNode != null) {
-                if (targetNode.isLeaf()) {
-                    if (targetNode.chunkIds().isEmpty()) {
-                        List<String> newChunkIds = new ArrayList<>();
-                        newChunkIds.add(chunkId);
-                        
-                        List<String> allKeywords = new ArrayList<>(targetNode.keywords());
-                        List<String> allEntities = new ArrayList<>(targetNode.keyEntities());
-                        List<String> allExamples = new ArrayList<>(targetNode.exampleQuestions());
-                        
-                        List<String> docKeywords = result.keywordDefinitions().stream()
-                            .map(kd -> kd.keyword())
-                            .collect(Collectors.toList());
-                        allKeywords.addAll(docKeywords);
-                        allEntities.addAll(result.entities());
-                        allExamples.addAll(result.exampleQuestions());
-                        
-                        dictionary.addEntries(docKeywords, targetNode.id());
-                        
-                        TreeNode updatedLeafNode = new TreeNode(
-                            targetNode.id(),
-                            targetNode.name(),
-                            targetNode.description(),
-                            NodeType.LEAF,
-                            targetNode.childrenIds(),
-                            newChunkIds,
-                            allEntities,
-                            allKeywords,
-                            allExamples
-                        );
-                        
-                        updatedNodes.put(targetNode.id(), updatedLeafNode);
-                    } else {
-                        TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
-                        updatedNodes.put(newLeafNode.id(), newLeafNode);
-                        
-                        String originalChunkId = targetNode.chunkIds().get(0);
-                        DocumentChunk originalChunk = existingTree.chunks().get(originalChunkId);
-                        
-                        List<String> newChildrenIds = new ArrayList<>();
-                        
-                        if (originalChunk != null) {
-                            TreeNode originalLeafNode = createLeafNodeForDocument(originalChunkId, originalChunk);
-                            updatedNodes.put(originalLeafNode.id(), originalLeafNode);
-                            newChildrenIds.add(originalLeafNode.id());
-                        }
-                        
-                        newChildrenIds.add(newLeafNode.id());
-                        
-                        List<String> allKeywords = new ArrayList<>(targetNode.keywords());
-                        List<String> docKeywords = result.keywordDefinitions().stream()
-                            .map(kd -> kd.keyword())
-                            .collect(Collectors.toList());
-                        allKeywords.addAll(docKeywords);
-                        
-                        dictionary.addEntries(docKeywords, targetNode.id());
-                        
-                        TreeNode updatedCategoryNode = new TreeNode(
-                            targetNode.id(),
-                            targetNode.name(),
-                            "Category node containing " + (targetNode.chunkIds().size() + 1) + " documents",
-                            NodeType.CATEGORY,
-                            newChildrenIds,
-                            List.of(),
-                            targetNode.keyEntities(),
-                            allKeywords,
-                            targetNode.exampleQuestions()
-                        );
-                        
-                        updatedNodes.put(targetNode.id(), updatedCategoryNode);
-                        
-                        if (targetNode.id().equals(currentRoot.id())) {
-                            currentRoot = updatedCategoryNode;
-                        }
-                    }
+
+            if (targetNode != null && targetNode.isLeaf()) {
+                if (targetNode.chunkIds().isEmpty()) {
+                    fillEmptyLeaf(updatedNodes, targetNode, chunkId, result);
                 } else {
-                    TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
-                    updatedNodes.put(newLeafNode.id(), newLeafNode);
-                    
-                    List<String> newChildrenIds = new ArrayList<>(targetNode.childrenIds());
-                    newChildrenIds.add(newLeafNode.id());
-                    
-                    TreeNode updatedCategoryNode = new TreeNode(
-                        targetNode.id(),
-                        targetNode.name(),
-                        targetNode.description(),
-                        NodeType.CATEGORY,
-                        newChildrenIds,
-                        targetNode.chunkIds(),
-                        targetNode.keyEntities(),
-                        targetNode.keywords(),
-                        targetNode.exampleQuestions()
-                    );
-                    
-                    updatedNodes.put(targetNode.id(), updatedCategoryNode);
+                    TreeNode newRoot = splitLeafIntoCategory(updatedNodes, existingTree, targetNode, chunkId, result, currentRoot);
+                    if (newRoot != null) currentRoot = newRoot;
                 }
+            } else if (targetNode != null) {
+                addToCategory(updatedNodes, targetNode, chunkId, result);
             } else {
-                TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
-                updatedNodes.put(newLeafNode.id(), newLeafNode);
-                
-                TreeNode root = currentRoot;
-                List<String> newChildrenIds = new ArrayList<>(root.childrenIds());
-                newChildrenIds.add(newLeafNode.id());
-                
-                List<String> newChunkIds = new ArrayList<>(root.chunkIds());
-                newChunkIds.add(chunkId);
-                
-                TreeNode updatedRoot = new TreeNode(
-                    root.id(),
-                    root.name(),
-                    root.description(),
-                    NodeType.CATEGORY,
-                    newChildrenIds,
-                    newChunkIds,
-                    root.keyEntities(),
-                    root.keywords(),
-                    root.exampleQuestions()
-                );
-                
-                updatedNodes.put(root.id(), updatedRoot);
-                currentRoot = updatedRoot;
+                currentRoot = addAsRootChild(updatedNodes, currentRoot, chunkId, result);
             }
         }
-        
+
         long duration = System.currentTimeMillis() - startTime;
         hookExecutor.executeHooks(HookType.TREE_BUILD_END,
             HookContext.builder(HookType.TREE_BUILD_END)
@@ -248,9 +129,95 @@ public class TreeBuilder {
                 .data("llmUsageStats", stats)
                 .durationMillis(duration)
         );
-        
+
         SemanticTree tree = new SemanticTree(currentRoot, updatedNodes, updatedChunks);
         return new TreeBuildResult(tree, stats);
+    }
+
+    private TreeBuildResult buildNewTree(List<DocumentComprehendResult> newResults, Map<String, DocumentChunk> newChunks) {
+        Map<String, DocumentComprehendResult> resultMap = new HashMap<>();
+        List<String> chunkIdList = new ArrayList<>(newChunks.keySet());
+        for (int i = 0; i < newResults.size(); i++) {
+            resultMap.put(chunkIdList.get(i), newResults.get(i));
+        }
+        return build(resultMap, newChunks);
+    }
+
+    private void fillEmptyLeaf(Map<String, TreeNode> nodes, TreeNode leaf, String chunkId,
+                                DocumentComprehendResult result) {
+        List<String> allKeywords = new ArrayList<>(leaf.keywords());
+        List<String> docKeywords = result.keywordDefinitions().stream()
+            .map(KeywordDefinition::keyword).collect(Collectors.toList());
+        allKeywords.addAll(docKeywords);
+        List<String> allEntities = new ArrayList<>(leaf.keyEntities());
+        allEntities.addAll(result.entities());
+        List<String> allExamples = new ArrayList<>(leaf.exampleQuestions());
+        allExamples.addAll(result.exampleQuestions());
+
+        dictionary.addEntries(docKeywords, leaf.id());
+
+        nodes.put(leaf.id(), new TreeNode(leaf.id(), leaf.name(), leaf.description(),
+            NodeType.LEAF, leaf.childrenIds(), List.of(chunkId), allEntities, allKeywords, allExamples));
+    }
+
+    private TreeNode splitLeafIntoCategory(Map<String, TreeNode> nodes, SemanticTree existingTree,
+                                            TreeNode leaf, String chunkId, DocumentComprehendResult result,
+                                            TreeNode currentRoot) {
+        TreeNode newLeafNode = createLeafNodeForDocument(chunkId, result);
+        nodes.put(newLeafNode.id(), newLeafNode);
+
+        List<String> childrenIds = new ArrayList<>();
+        String originalChunkId = leaf.chunkIds().get(0);
+        DocumentChunk originalChunk = existingTree.chunks().get(originalChunkId);
+        if (originalChunk != null) {
+            TreeNode originalLeaf = createLeafNodeForDocument(originalChunkId, originalChunk);
+            nodes.put(originalLeaf.id(), originalLeaf);
+            childrenIds.add(originalLeaf.id());
+        }
+        childrenIds.add(newLeafNode.id());
+
+        List<String> allKeywords = new ArrayList<>(leaf.keywords());
+        List<String> docKeywords = result.keywordDefinitions().stream()
+            .map(KeywordDefinition::keyword).collect(Collectors.toList());
+        allKeywords.addAll(docKeywords);
+        dictionary.addEntries(docKeywords, leaf.id());
+
+        TreeNode category = new TreeNode(leaf.id(), leaf.name(),
+            "Category node containing " + (leaf.chunkIds().size() + 1) + " documents",
+            NodeType.CATEGORY, childrenIds, List.of(), leaf.keyEntities(), allKeywords, leaf.exampleQuestions());
+        nodes.put(leaf.id(), category);
+
+        return leaf.id().equals(currentRoot.id()) ? category : null;
+    }
+
+    private void addToCategory(Map<String, TreeNode> nodes, TreeNode category, String chunkId,
+                                DocumentComprehendResult result) {
+        TreeNode newLeaf = createLeafNodeForDocument(chunkId, result);
+        nodes.put(newLeaf.id(), newLeaf);
+
+        List<String> newChildrenIds = new ArrayList<>(category.childrenIds());
+        newChildrenIds.add(newLeaf.id());
+
+        nodes.put(category.id(), new TreeNode(category.id(), category.name(), category.description(),
+            NodeType.CATEGORY, newChildrenIds, category.chunkIds(),
+            category.keyEntities(), category.keywords(), category.exampleQuestions()));
+    }
+
+    private TreeNode addAsRootChild(Map<String, TreeNode> nodes, TreeNode root, String chunkId,
+                                     DocumentComprehendResult result) {
+        TreeNode newLeaf = createLeafNodeForDocument(chunkId, result);
+        nodes.put(newLeaf.id(), newLeaf);
+
+        List<String> newChildrenIds = new ArrayList<>(root.childrenIds());
+        newChildrenIds.add(newLeaf.id());
+        List<String> newChunkIds = new ArrayList<>(root.chunkIds());
+        newChunkIds.add(chunkId);
+
+        TreeNode updatedRoot = new TreeNode(root.id(), root.name(), root.description(),
+            NodeType.CATEGORY, newChildrenIds, newChunkIds,
+            root.keyEntities(), root.keywords(), root.exampleQuestions());
+        nodes.put(root.id(), updatedRoot);
+        return updatedRoot;
     }
 
     private TreeBuildInternalResult buildRecursiveWithNodes(String name, Map<String, DocumentComprehendResult> documents, LLMUsageStats stats) {
@@ -479,28 +446,17 @@ public class TreeBuilder {
         if (currentNode.childrenIds().isEmpty()) {
             return currentNode;
         }
-        
-        TreeNode bestChild = null;
-        int maxMatchCount = 0;
-        
-        for (String childId : currentNode.childrenIds()) {
-            TreeNode child = tree.getNode(childId);
-            if (child == null) {
-                continue;
-            }
-            
-            int matchCount = countKeywordMatches(docKeywords, child);
-            
-            if (matchCount > maxMatchCount) {
-                maxMatchCount = matchCount;
-                bestChild = child;
-            }
+
+        Map.Entry<TreeNode, Integer> best = currentNode.childrenIds().stream()
+            .map(tree::getNode)
+            .filter(Objects::nonNull)
+            .map(child -> Map.entry(child, countKeywordMatches(docKeywords, child)))
+            .max(Map.Entry.comparingByValue())
+            .orElse(null);
+
+        if (best != null && best.getValue() > 0) {
+            return findBestNodeForDocument(best.getKey(), tree, result);
         }
-        
-        if (maxMatchCount > 0) {
-            return findBestNodeForDocument(bestChild, tree, result);
-        }
-        
         return currentNode;
     }
 

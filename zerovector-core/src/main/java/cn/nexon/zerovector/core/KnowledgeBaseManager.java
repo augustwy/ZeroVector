@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Objects;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -44,7 +45,7 @@ public class KnowledgeBaseManager {
         this.documentComprehender = documentComprehender;
         this.concurrencyProperties = concurrencyProperties;
         this.baseStoragePath = Paths.get(baseStoragePath);
-        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
+        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
     }
 
@@ -55,12 +56,12 @@ public class KnowledgeBaseManager {
         }
 
         System.out.println("");
-        System.out.println(" ________   _______ .______        ______      ____    ____  _______   ______ .___________.  ______   .______   ");
-        System.out.println("|       /  |   ____||   _  \\      /  __  \\     \\   \\  /   / |   ____| /      ||           | /  __  \\  |   _  \\ ");
-        System.out.println("`---/  /   |  |__   |  |_)  |    |  |  |  |     \\   \\/   /  |  |__   |  ,----'`---|  |----`|  |  |  | |  |_)  |");
-        System.out.println("   /  /    |   __|  |      /     |  |  |  |      \\      /   |   __|  |  |         |  |     |  |  |  | |      /");
-        System.out.println("  /  /----.|  |____ |  |\\  \\----.|  `--'  |       \\    /    |  |____ |  `----.    |  |     |  `--'  | |  |\\  \\----.");
-        System.out.println(" /________||_______|| _| `._____| \\______/         \\__/     |_______| \\______|    |__|      \\______/  | _| `._____|");
+        System.out.println(" ________   _______ .______      ______      ____    ____  _______   ______ .___________.  ______   .______   ");
+        System.out.println("|       /  |   ____||   _  \\    /  __  \\     \\   \\  /   / |   ____| /      ||           | /  __  \\  |   _  \\ ");
+        System.out.println("`---/  /   |  |__   |  |_)  |  |  |  |  |     \\   \\/   /  |  |__   |  ,----'`---|  |----`|  |  |  | |  |_)  |");
+        System.out.println("   /  /    |   __|  |      /   |  |  |  |      \\      /   |   __|  |  |         |  |     |  |  |  | |      /");
+        System.out.println("  /  /----.|  |____ |  |\\  \\--.|  `--'  |       \\    /    |  |____ |  `----.    |  |     |  `--'  | |  |\\  \\--.");
+        System.out.println(" /________||_______|| _| `.___| \\______/         \\__/     |_______| \\______|    |__|      \\______/  | _| `.___|");
         System.out.println("");
         System.out.println("     Zero Vector  v1.0.0");     
         System.out.println("");

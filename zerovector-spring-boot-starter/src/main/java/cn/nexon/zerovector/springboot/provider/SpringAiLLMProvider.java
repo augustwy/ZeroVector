@@ -38,22 +38,26 @@ public class SpringAiLLMProvider implements LLMProvider {
         this.navigationClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.navigation())).build();
     }
 
-    @Override
-    public LLMResponse comprehendChunk(String prompt) {
+    private LLMResponse execute(ChatClient client, String prompt, String operationName) {
         long startTime = System.currentTimeMillis();
         try {
-            CallResponseSpec callResponseSpec = clusteringClient.prompt().user(prompt).call();
+            CallResponseSpec callResponseSpec = client.prompt().user(prompt).call();
             ChatResponse callResponse = callResponseSpec.chatResponse();
-            String response = callResponse.getResult().getOutput().getText();
-            Usage usage = callResponse.getMetadata().getUsage();
             long duration = System.currentTimeMillis() - startTime;
+            String response = callResponse.getResult().getOutput().getText();
             logger.debug("LLM原始响应: {}", response);
+            Usage usage = callResponse.getMetadata().getUsage();
             return LLMResponse.success(response, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - startTime;
-            logger.error("理解文档块失败", e);
+            logger.error("{}失败", operationName, e);
             return LLMResponse.failure(e.getMessage(), duration);
         }
+    }
+
+    @Override
+    public LLMResponse comprehendChunk(String prompt) {
+        return execute(clusteringClient, prompt, "理解文档块");
     }
 
     @Override
@@ -63,129 +67,40 @@ public class SpringAiLLMProvider implements LLMProvider {
         if (cached != null) {
             return LLMResponse.success(cached, 0, 0, 0);
         }
-
-        long startTime = System.currentTimeMillis();
-        try {
-            CallResponseSpec callResponseSpec = clusteringClient.prompt().user(prompt).call();
-            ChatResponse callResponse = callResponseSpec.chatResponse();
-            String summary = callResponse.getResult().getOutput().getText();
-            summaryCache.put(cacheKey, summary);
-            long duration = System.currentTimeMillis() - startTime;
-            logger.debug("生成摘要成功，摘要: {}", summary);
-            Usage usage = callResponse.getMetadata().getUsage();
-            return LLMResponse.success(summary, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("生成摘要失败", e);
-            return LLMResponse.failure(e.getMessage(), duration);
+        LLMResponse response = execute(clusteringClient, prompt, "生成摘要");
+        if (response.success()) {
+            summaryCache.put(cacheKey, response.content());
         }
+        return response;
     }
 
     @Override
     public LLMResponse clusterDocuments(String prompt) {
-        long startTime = System.currentTimeMillis();
-        try {
-            CallResponseSpec callResponseSpec = clusteringClient.prompt().user(prompt).call();
-            ChatResponse callResponse = callResponseSpec.chatResponse();
-            long duration = System.currentTimeMillis() - startTime;
-            String response = callResponse.getResult().getOutput().getText();
-            logger.debug("LLM原始响应: {}", response);
-            Usage usage = callResponse.getMetadata().getUsage();
-            return LLMResponse.success(response, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("聚类失败", e);
-            return LLMResponse.failure(e.getMessage(), duration);
-        }
+        return execute(clusteringClient, prompt, "聚类文档");
     }
 
     @Override
     public LLMResponse extractKeywords(String prompt) {
-        long startTime = System.currentTimeMillis();
-        try {
-            CallResponseSpec callResponseSpec = clusteringClient.prompt().user(prompt).call();
-            ChatResponse callResponse = callResponseSpec.chatResponse();
-            long duration = System.currentTimeMillis() - startTime;
-            String response = callResponse.getResult().getOutput().getText();
-            logger.debug("LLM原始响应: {}", response);
-            Usage usage = callResponse.getMetadata().getUsage();
-            return LLMResponse.success(response, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("提取关键词失败", e);
-            return LLMResponse.failure(e.getMessage(), duration);
-        }
+        return execute(clusteringClient, prompt, "提取关键词");
     }
 
     @Override
     public LLMResponse extractEntities(String prompt) {
-        long startTime = System.currentTimeMillis();
-        try {
-            CallResponseSpec callResponseSpec = clusteringClient.prompt().user(prompt).call();
-            ChatResponse callResponse = callResponseSpec.chatResponse();
-            long duration = System.currentTimeMillis() - startTime;
-            String response = callResponse.getResult().getOutput().getText();
-            logger.debug("LLM原始响应: {}", response);
-            Usage usage = callResponse.getMetadata().getUsage();
-            return LLMResponse.success(response, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("提取实体失败", e);
-            return LLMResponse.failure(e.getMessage(), duration);
-        }
+        return execute(clusteringClient, prompt, "提取实体");
     }
 
     @Override
     public LLMResponse generateExampleQuestions(String prompt) {
-        long startTime = System.currentTimeMillis();
-        try {
-            CallResponseSpec callResponseSpec = clusteringClient.prompt().user(prompt).call();
-            ChatResponse callResponse = callResponseSpec.chatResponse();
-            String response = callResponse.getResult().getOutput().getText();
-            Usage usage = callResponse.getMetadata().getUsage();
-            long duration = System.currentTimeMillis() - startTime;
-            logger.debug("LLM原始响应: {}", response);
-            return LLMResponse.success(response, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("生成示例问题失败", e);
-            return LLMResponse.failure(e.getMessage(), duration);
-        }
+        return execute(clusteringClient, prompt, "生成示例问题");
     }
 
     @Override
     public LLMResponse decideNavigation(String prompt) {
-        long startTime = System.currentTimeMillis();
-        try {
-            CallResponseSpec callResponseSpec = navigationClient.prompt().user(prompt).call();
-            ChatResponse callResponse = callResponseSpec.chatResponse();
-            long duration = System.currentTimeMillis() - startTime;
-            String response = callResponse.getResult().getOutput().getText();
-            logger.debug("LLM原始响应: {}", response);
-            Usage usage = callResponse.getMetadata().getUsage();
-            return LLMResponse.success(response, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("导航决策失败", e);
-            return LLMResponse.failure(e.getMessage(), duration);
-        }
+        return execute(navigationClient, prompt, "导航决策");
     }
 
     @Override
     public LLMResponse extractQueryKeywords(String prompt) {
-        long startTime = System.currentTimeMillis();
-        try {
-            CallResponseSpec callResponseSpec = clusteringClient.prompt().user(prompt).call();
-            ChatResponse callResponse = callResponseSpec.chatResponse();
-            String response = callResponse.getResult().getOutput().getText();
-            Usage usage = callResponse.getMetadata().getUsage();
-            long duration = System.currentTimeMillis() - startTime;
-            logger.debug("LLM原始响应: {}", response);
-            return LLMResponse.success(response, usage.getPromptTokens(), usage.getCompletionTokens(), duration);
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("提取查询关键字失败", e);
-            return LLMResponse.failure(e.getMessage(), duration);
-        }
+        return execute(clusteringClient, prompt, "提取查询关键字");
     }
 }

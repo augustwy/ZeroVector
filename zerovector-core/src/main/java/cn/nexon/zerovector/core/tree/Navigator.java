@@ -9,6 +9,7 @@ import cn.nexon.zerovector.core.hook.HookExecutor;
 import cn.nexon.zerovector.core.hook.HookType;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.model.*;
+import cn.nexon.zerovector.core.util.JsonUtils;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +44,7 @@ public class Navigator {
         this.semanticTree = semanticTree;
         this.llmService = llmService;
         this.documentStore = documentStore;
-        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
+        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.currentNode = semanticTree.rootNode();
         this.navigationHistory = new CopyOnWriteArrayList<>();
     }
@@ -227,8 +228,7 @@ public class Navigator {
     
     private NavigationAction parseNavigationResponse(String response, List<TreeNode> childNodes) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            NavigationDecisionResult result = objectMapper.readValue(response, NavigationDecisionResult.class);
+            NavigationDecisionResult result = JsonUtils.getObjectMapper().readValue(response, NavigationDecisionResult.class);
             
             if (result.selectedIndex() >= 0 && result.selectedIndex() < childNodes.size()) {
                 TreeNode selectedNode = childNodes.get(result.selectedIndex());
@@ -254,9 +254,6 @@ public class Navigator {
             }
         }
     }
-    
-    private record NavigationDecisionResult(int selectedIndex, String reasoning, double confidence) {}
-    
     /**
      * 获取当前节点
      */

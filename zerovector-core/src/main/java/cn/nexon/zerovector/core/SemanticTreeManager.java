@@ -44,6 +44,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -108,7 +109,7 @@ public class SemanticTreeManager {
             HookExecutor hookExecutor) {
         this.llmProvider = llmProvider;
         this.documentComprehender = documentComprehender;
-        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
+        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.concurrencyProperties = concurrencyProperties;
         this.storagePath = storagePath;
         this.useShardedStorage = useShardedStorage;
@@ -151,7 +152,7 @@ public class SemanticTreeManager {
         this.chunkStorage = chunkStorage;
         this.dictionaryStorage = dictionaryStorage;
         this.documentCopyStorage = documentCopyStorage;
-        this.hookExecutor = hookExecutor != null ? hookExecutor : new DefaultHookExecutor();
+        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.concurrencyProperties = concurrencyProperties;
         this.storagePath = storagePath;
         this.treeFilePath = treeFilePath;
@@ -483,17 +484,13 @@ public class SemanticTreeManager {
     }
 
     private Path createDocumentCopy(Path originalFile) {
-        try {
-            String fileId = documentCopyStorage.saveCopy(originalFile);
-            Optional<Path> copiedPath = documentCopyStorage.getFilePath(fileId);
-            if (copiedPath.isPresent()) {
-                return copiedPath.get();
-            }
-            throw new StorageException(fileId, "createDocumentCopy", 
-                new IllegalStateException("无法获取复制后的文件路径"));
-        } catch (StorageException e) {
-            throw e;
+        String fileId = documentCopyStorage.saveCopy(originalFile);
+        Optional<Path> copiedPath = documentCopyStorage.getFilePath(fileId);
+        if (copiedPath.isPresent()) {
+            return copiedPath.get();
         }
+        throw new StorageException(fileId, "createDocumentCopy",
+            new IllegalStateException("无法获取复制后的文件路径"));
     }
 
     private TreeBuilder.TreeBuildResult updateSemanticTreeFromDocuments(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {

@@ -204,7 +204,6 @@ public class MMapDocumentStore implements AutoCloseable {
         lock.writeLock().lock();
         try {
             if (index.isEmpty()) {
-                // 清空文件
                 file.setLength(INITIAL_BUFFER_SIZE);
                 MappedByteBuffer newBuffer = file.getChannel().map(
                     FileChannel.MapMode.READ_WRITE, 0, INITIAL_BUFFER_SIZE);
@@ -212,96 +211,83 @@ public class MMapDocumentStore implements AutoCloseable {
                 logger.debug("存储已清空");
                 return;
             }
-            
-            // 创建临时文件
+
             String tempFilePath = dataFilePath + ".tmp";
             try (RandomAccessFile tempFile = new RandomAccessFile(tempFilePath, "rw")) {
                 tempFile.setLength(INITIAL_BUFFER_SIZE);
                 MappedByteBuffer tempBuffer = tempFile.getChannel().map(
                     FileChannel.MapMode.READ_WRITE, 0, INITIAL_BUFFER_SIZE);
-                
-                // 重建索引和数据
-                Map<String, FileLocation> newIndex = new ConcurrentHashMap<>();
-                
-                for (Map.Entry<String, FileLocation> entry : index.entrySet()) {
-                    String chunkId = entry.getKey();
-                    FileLocation oldLocation = entry.getValue();
-                    
-                    // 读取旧数据
-                    MappedByteBuffer oldBuffer = buffer().duplicate();
-                    oldBuffer.position((int) oldLocation.offset());
-                    int length = oldBuffer.getInt();
-                    byte[] bytes = new byte[length];
-                    oldBuffer.get(bytes);
-                    
-                    // 写入新位置
-                    if (tempBuffer.position() + 4 + bytes.length > tempBuffer.capacity()) {
-                        // 扩展临时缓冲区
-                        long newSize = tempBuffer.capacity() * 2;
-                        tempFile.setLength(newSize);
-                        MappedByteBuffer newTempBuffer = tempFile.getChannel().map(
-                            FileChannel.MapMode.READ_WRITE, 0, newSize);
-                        tempBuffer.rewind();
-                        newTempBuffer.put(tempBuffer);
-                        newTempBuffer.position(tempBuffer.position());
-                        tempBuffer = newTempBuffer;
-                    }
-                    
-                    long newOffset = tempBuffer.position();
-                    tempBuffer.putInt(length);
-                    tempBuffer.put(bytes);
-                    
-                    newIndex.put(chunkId, new FileLocation(newOffset, length));
-                }
-                
-                // 替换文件 - 安全操作：先备份原文件，再替换
-                String backupFilePath = dataFilePath + ".old";
-                file.close();
-                
-                // 1. 将原文件重命名为备份
-                if (Files.exists(Paths.get(dataFilePath))) {
-                    Files.move(Paths.get(dataFilePath), Paths.get(backupFilePath));
-                }
-                
-                try {
-                    // 2. 将临时文件重命名为新文件
-                    Files.move(Paths.get(tempFilePath), Paths.get(dataFilePath));
-                    
-                    // 3. 重新打开文件
-                    file = new RandomAccessFile(dataFilePath, "rw");
-                    MappedByteBuffer newBuffer = file.getChannel().map(
-                        FileChannel.MapMode.READ_WRITE, 0, file.length());
-                    setBuffer(newBuffer);
-                    index.clear();
-                    index.putAll(newIndex);
-                    
-                    // 4. 删除备份文件
-                    Files.deleteIfExists(Paths.get(backupFilePath));
-                    
-                    logger.debug("存储压缩完成，清理了无效数据");
-                } catch (Exception e) {
-                    // 如果失败，尝试从备份恢复
-                    logger.error("文件替换失败，尝试从备份恢复", e);
-                    try {
-                        if (Files.exists(Paths.get(backupFilePath))) {
-                            Files.move(Paths.get(backupFilePath), Paths.get(dataFilePath));
-                        }
-                        // 重新打开原始文件
-                        file = new RandomAccessFile(dataFilePath, "rw");
-                        MappedByteBuffer newBuffer = file.getChannel().map(
-                            FileChannel.MapMode.READ_WRITE, 0, file.length());
-                        setBuffer(newBuffer);
-                    } catch (IOException ex) {
-                        logger.error("从备份恢复失败: {}", ex.getMessage(), ex);
-                    } finally {
-                        // 清理临时文件
-                        Files.deleteIfExists(Paths.get(tempFilePath));
-                    }
-                    throw e;
-                }
+                Map<String, FileLocation> newIndex = writeCompactData(tempBuffer, tempFile);
+                swapCompactFile(newIndex, tempFilePath);
             }
         } finally {
             lock.writeLock().unlock();
+        }
+    }
+
+    private Map<String, FileLocation> writeCompactData(MappedByteBuffer tempBuffer, RandomAccessFile tempFile) throws IOException {
+        Map<String, FileLocation> newIndex = new ConcurrentHashMap<>();
+        MappedByteBuffer oldBuffer = buffer().duplicate();
+
+        for (Map.Entry<String, FileLocation> entry : index.entrySet()) {
+            String chunkId = entry.getKey();
+            FileLocation oldLocation = entry.getValue();
+
+            oldBuffer.position((int) oldLocation.offset());
+            int length = oldBuffer.getInt();
+            byte[] bytes = new byte[length];
+            oldBuffer.get(bytes);
+
+            if (tempBuffer.position() + 4 + bytes.length > tempBuffer.capacity()) {
+                long newSize = tempBuffer.capacity() * 2;
+                tempFile.setLength(newSize);
+                MappedByteBuffer expanded = tempFile.getChannel().map(
+                    FileChannel.MapMode.READ_WRITE, 0, newSize);
+                tempBuffer.rewind();
+                expanded.put(tempBuffer);
+                expanded.position(tempBuffer.position());
+                tempBuffer = expanded;
+            }
+
+            long newOffset = tempBuffer.position();
+            tempBuffer.putInt(length);
+            tempBuffer.put(bytes);
+            newIndex.put(chunkId, new FileLocation(newOffset, length));
+        }
+        return newIndex;
+    }
+
+    private void swapCompactFile(Map<String, FileLocation> newIndex, String tempFilePath) throws IOException {
+        String backupFilePath = dataFilePath + ".old";
+        file.close();
+
+        Files.move(Paths.get(dataFilePath), Paths.get(backupFilePath));
+        try {
+            Files.move(Paths.get(tempFilePath), Paths.get(dataFilePath));
+            file = new RandomAccessFile(dataFilePath, "rw");
+            MappedByteBuffer newBuffer = file.getChannel().map(
+                FileChannel.MapMode.READ_WRITE, 0, file.length());
+            setBuffer(newBuffer);
+            index.clear();
+            index.putAll(newIndex);
+            Files.deleteIfExists(Paths.get(backupFilePath));
+            logger.debug("存储压缩完成，清理了无效数据");
+        } catch (Exception e) {
+            logger.error("文件替换失败，尝试从备份恢复", e);
+            try {
+                if (Files.exists(Paths.get(backupFilePath))) {
+                    Files.move(Paths.get(backupFilePath), Paths.get(dataFilePath));
+                }
+                file = new RandomAccessFile(dataFilePath, "rw");
+                MappedByteBuffer newBuffer = file.getChannel().map(
+                    FileChannel.MapMode.READ_WRITE, 0, file.length());
+                setBuffer(newBuffer);
+            } catch (IOException ex) {
+                logger.error("从备份恢复失败: {}", ex.getMessage(), ex);
+            } finally {
+                Files.deleteIfExists(Paths.get(tempFilePath));
+            }
+            throw e;
         }
     }
     
