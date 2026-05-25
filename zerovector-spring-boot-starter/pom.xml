@@ -15,9 +15,9 @@
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <spring-boot.version>4.0.0</spring-boot.version>
-        <spring-ai.version>2.0.0-M2</spring-ai.version>
-        <langchain4j.version>0.34.0</langchain4j.version>
+        <spring-boot.version>4.0.6</spring-boot.version>
+        <spring-ai.version>2.0.0-M7</spring-ai.version>
+        <langchain4j.version>1.15.0</langchain4j.version>
     </properties>
 
     <dependencyManagement>
