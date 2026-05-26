@@ -9,6 +9,7 @@ public class ConcurrencyProperties {
     
     private int maxConcurrentRequests = 5;
     private double requestsPerSecond = 2.0;
+    private int maxNavigationSteps = 20;
     
     public int getMaxConcurrentRequests() {
         return maxConcurrentRequests;
@@ -34,5 +35,17 @@ public class ConcurrencyProperties {
                     MIN_REQUESTS_PER_SECOND, MAX_REQUESTS_PER_SECOND, requestsPerSecond));
         }
         this.requestsPerSecond = requestsPerSecond;
+    }
+
+    public int getMaxNavigationSteps() {
+        return maxNavigationSteps;
+    }
+
+    public void setMaxNavigationSteps(int maxNavigationSteps) {
+        if (maxNavigationSteps < 5 || maxNavigationSteps > 100) {
+            throw new IllegalArgumentException(
+                String.format("maxNavigationSteps must be between 5 and 100, got: %d", maxNavigationSteps));
+        }
+        this.maxNavigationSteps = maxNavigationSteps;
     }
 }

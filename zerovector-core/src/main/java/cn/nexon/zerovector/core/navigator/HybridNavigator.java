@@ -38,17 +38,19 @@ public class HybridNavigator {
     private final LLMProvider llm;
     private final ChunkStorage chunkStore;
     private final HookExecutor hookExecutor;
+    private final int maxNavigationSteps;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, ChunkStorage chunkStore) {
-        this(tree, dictionary, llm, chunkStore, new DefaultHookExecutor());
+    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, ChunkStorage chunkStore, int maxNavigationSteps) {
+        this(tree, dictionary, llm, chunkStore, maxNavigationSteps, new DefaultHookExecutor());
     }
 
-    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, ChunkStorage chunkStore, HookExecutor hookExecutor) {
+    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, ChunkStorage chunkStore, int maxNavigationSteps, HookExecutor hookExecutor) {
         this.tree = tree;
         this.dictionary = dictionary;
         this.llm = llm;
         this.chunkStore = chunkStore;
+        this.maxNavigationSteps = maxNavigationSteps;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
     }
     
@@ -133,7 +135,12 @@ public class HybridNavigator {
             }
             
             stepCount++;
-            
+
+            if (stepCount > maxNavigationSteps) {
+                logger.warn("导航超过最大步数限制 ({}), 强制停止", maxNavigationSteps);
+                return handleFallback(query, navigationHistory, stats);
+            }
+
             String prompt = buildNavigationPrompt(query, current);
             
             LLMResponse response = llm.decideNavigation(prompt);

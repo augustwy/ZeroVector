@@ -32,18 +32,20 @@ public class Navigator {
     private final LLMProvider llmService;
     private final ChunkStorage chunkStore;
     private final HookExecutor hookExecutor;
+    private final int maxNavigationSteps;
 
     private TreeNode currentNode;
     private final List<NavigationPath> navigationHistory;
 
-    public Navigator(SemanticTree semanticTree, LLMProvider llmService, ChunkStorage chunkStore) {
-        this(semanticTree, llmService, chunkStore, new DefaultHookExecutor());
+    public Navigator(SemanticTree semanticTree, LLMProvider llmService, ChunkStorage chunkStore, int maxNavigationSteps) {
+        this(semanticTree, llmService, chunkStore, maxNavigationSteps, new DefaultHookExecutor());
     }
 
-    public Navigator(SemanticTree semanticTree, LLMProvider llmService, ChunkStorage chunkStore, HookExecutor hookExecutor) {
+    public Navigator(SemanticTree semanticTree, LLMProvider llmService, ChunkStorage chunkStore, int maxNavigationSteps, HookExecutor hookExecutor) {
         this.semanticTree = semanticTree;
         this.llmService = llmService;
         this.chunkStore = chunkStore;
+        this.maxNavigationSteps = maxNavigationSteps;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.currentNode = semanticTree.rootNode();
         this.navigationHistory = new CopyOnWriteArrayList<>();
@@ -77,7 +79,7 @@ public class Navigator {
      * 递归导航逻辑
      */
     private NavigationResult navigateRecursive(String query, TreeNode node, int depth, LLMUsageStats stats) {
-        if (depth > 10) {
+        if (depth > maxNavigationSteps) {
             return new NavigationResult(
                 List.of(),
                 "Navigation depth exceeded",

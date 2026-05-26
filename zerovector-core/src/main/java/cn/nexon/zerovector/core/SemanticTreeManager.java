@@ -222,9 +222,9 @@ public class SemanticTreeManager {
             }
 
             if (this.semanticTree != null) {
-                this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, hookExecutor);
-                this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), 
-                    llmProvider, chunkStore, hookExecutor);
+                this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
+                this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(),
+                    llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
                 logger.debug("已加载已保存的语义树");
             }
         } catch (IOException e) {
@@ -269,8 +269,8 @@ public class SemanticTreeManager {
             this.semanticTree = buildResult.tree();
             totalStats.merge(buildResult.llmUsageStats());
 
-            this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, hookExecutor);
-            this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStore, hookExecutor);
+            this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
+            this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
 
             long duration = System.currentTimeMillis() - startTime;
             hookExecutor.executeHooks(HookType.TREE_BUILD_END,
@@ -508,8 +508,8 @@ public class SemanticTreeManager {
     }
 
     private void updateNavigators() {
-        this.navigator = new Navigator(semanticTree, llmProvider, chunkStorage, hookExecutor);
-        this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStorage, hookExecutor);
+        this.navigator = new Navigator(semanticTree, llmProvider, chunkStorage, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
+        this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStorage, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
     }
 
     /**
