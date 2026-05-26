@@ -158,7 +158,7 @@ public class CachedLLMProvider implements LLMProvider {
         }
     }
     
-    private int maxSearchItems = 100; // 最多检查100个最近使用的条目
+    private volatile int maxSearchItems = 100; // 最多检查100个最近使用的条目
     
     /**
      * 设置相似性搜索的最大条目数

@@ -14,12 +14,15 @@ import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import cn.nexon.zerovector.core.util.JsonUtils;
+import cn.nexon.zerovector.core.util.LLMExecutors;
 import cn.nexon.zerovector.core.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +37,7 @@ public class TreeBuilder {
     private final KeywordDictionary dictionary;
     private final MMapDocumentStore store;
     private final HookExecutor hookExecutor;
+    private final ExecutorService executor;
 
     public TreeBuilder(LLMProvider llmProvider, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
         this(llmProvider, dictionary, store, concurrencyConfig, new DefaultHookExecutor());
@@ -44,6 +48,7 @@ public class TreeBuilder {
         this.dictionary = dictionary;
         this.store = store;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
+        this.executor = LLMExecutors.create(concurrencyConfig);
     }
 
     /**
@@ -341,19 +346,28 @@ public class TreeBuilder {
         String keywordsPrompt = LLMPromptTemplates.extractKeywords(summariesText);
         String entitiesPrompt = LLMPromptTemplates.extractEntities(summariesText);
         String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
-        
-        LLMResponse keywordsResponse = llmProvider.extractKeywords(keywordsPrompt);
-        LLMResponse entitiesResponse = llmProvider.extractEntities(entitiesPrompt);
-        LLMResponse examplesResponse = llmProvider.generateExampleQuestions(examplesPrompt);
-        
+
+        CompletableFuture<LLMResponse> keywordsFuture = CompletableFuture.supplyAsync(
+            () -> llmProvider.extractKeywords(keywordsPrompt), executor);
+        CompletableFuture<LLMResponse> entitiesFuture = CompletableFuture.supplyAsync(
+            () -> llmProvider.extractEntities(entitiesPrompt), executor);
+        CompletableFuture<LLMResponse> examplesFuture = CompletableFuture.supplyAsync(
+            () -> llmProvider.generateExampleQuestions(examplesPrompt), executor);
+
+        CompletableFuture.allOf(keywordsFuture, entitiesFuture, examplesFuture).join();
+
+        LLMResponse keywordsResponse = keywordsFuture.join();
+        LLMResponse entitiesResponse = entitiesFuture.join();
+        LLMResponse examplesResponse = examplesFuture.join();
+
         stats.add(keywordsResponse);
         stats.add(entitiesResponse);
         stats.add(examplesResponse);
-        
+
         List<String> keywords = parseListResponse(keywordsResponse.content());
         List<String> entities = parseListResponse(entitiesResponse.content());
         List<String> examples = parseListResponse(examplesResponse.content());
-        
+
         return new NodeMetadata(keywords, entities, examples);
     }
 

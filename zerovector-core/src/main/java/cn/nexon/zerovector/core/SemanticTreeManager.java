@@ -32,6 +32,7 @@ import cn.nexon.zerovector.core.storage.spi.DocumentCopyStorage;
 import cn.nexon.zerovector.core.tree.Navigator;
 import cn.nexon.zerovector.core.tree.TreeBuilder;
 import cn.nexon.zerovector.core.util.FileUtils;
+import cn.nexon.zerovector.core.util.LLMExecutors;
 import cn.nexon.zerovector.core.util.MD5Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +48,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 
 /**
  * 语义树管理器
@@ -62,6 +64,7 @@ public class SemanticTreeManager {
     private final DocumentComprehender documentComprehender;
     private final HookExecutor hookExecutor;
     private final ConcurrencyProperties concurrencyProperties;
+    private final ExecutorService executor;
 
     private final ChunkStorage chunkStorage;
     private final DictionaryStorage dictionaryStorage;
@@ -111,6 +114,7 @@ public class SemanticTreeManager {
         this.documentComprehender = documentComprehender;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.concurrencyProperties = concurrencyProperties;
+        this.executor = LLMExecutors.create(concurrencyProperties);
         this.storagePath = storagePath;
         this.useShardedStorage = useShardedStorage;
 
@@ -154,6 +158,7 @@ public class SemanticTreeManager {
         this.documentCopyStorage = documentCopyStorage;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.concurrencyProperties = concurrencyProperties;
+        this.executor = LLMExecutors.create(concurrencyProperties);
         this.storagePath = storagePath;
         this.treeFilePath = treeFilePath;
         this.treeStorageDir = treeFilePath + "_shards";
@@ -301,14 +306,19 @@ public class SemanticTreeManager {
         Map<String, DocumentComprehendResult> comprehendResultMap = new LinkedHashMap<>();
         Map<String, DocumentChunk> chunkMap = new LinkedHashMap<>();
 
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (Document document : documents) {
-            logger.debug("  - {}: {}", document.id(), document.title());
-            DocumentComprehendResult result = documentComprehender.comprehend(document);
-            comprehendResultMap.put(document.id(), result);
-
-            DocumentChunk chunk = createDocumentChunk(document, result);
-            chunkMap.put(document.id(), chunk);
+            futures.add(CompletableFuture.runAsync(() -> {
+                logger.debug("  - {}: {}", document.id(), document.title());
+                DocumentComprehendResult result = documentComprehender.comprehend(document);
+                DocumentChunk chunk = createDocumentChunk(document, result);
+                synchronized (comprehendResultMap) {
+                    comprehendResultMap.put(document.id(), result);
+                    chunkMap.put(document.id(), chunk);
+                }
+            }, executor));
         }
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
 
         return new DocumentProcessingResult(comprehendResultMap, chunkMap);
     }
@@ -638,5 +648,6 @@ public class SemanticTreeManager {
         if (shardedTreeStorage != null) {
             shardedTreeStorage.close();
         }
+        executor.close();
     }
 }
