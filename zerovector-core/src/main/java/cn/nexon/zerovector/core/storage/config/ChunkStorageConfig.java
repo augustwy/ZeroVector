@@ -34,6 +34,7 @@ public class ChunkStorageConfig extends StorageConfig {
      * <p>每个分片文件包含的最大记录数
      */
     private int shardSize = 100;
+    private int mmapShardCount = 4;
 
     public ChunkStorageConfig() {
         super("local-mmap");
@@ -74,5 +75,13 @@ public class ChunkStorageConfig extends StorageConfig {
 
     public void setShardSize(int shardSize) {
         this.shardSize = shardSize;
+    }
+
+    public int getMmapShardCount() {
+        return mmapShardCount;
+    }
+
+    public void setMmapShardCount(int mmapShardCount) {
+        this.mmapShardCount = mmapShardCount;
     }
 }

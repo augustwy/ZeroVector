@@ -2,7 +2,7 @@ package cn.nexon.zerovector.core.storage.local;
 
 import cn.nexon.zerovector.core.exception.StorageException;
 import cn.nexon.zerovector.core.model.DocumentChunk;
-import cn.nexon.zerovector.core.storage.MMapDocumentStore;
+import cn.nexon.zerovector.core.storage.ShardedMMapStore;
 import cn.nexon.zerovector.core.storage.ShardedTreeStorage;
 import cn.nexon.zerovector.core.storage.config.ChunkStorageConfig;
 import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
@@ -42,7 +42,7 @@ public class LocalFileChunkStorage implements ChunkStorage {
 
     private static final Logger logger = LoggerFactory.getLogger(LocalFileChunkStorage.class);
 
-    private MMapDocumentStore mmapStore;
+    private ShardedMMapStore mmapStore;
     private ShardedTreeStorage shardedStorage;
     private ChunkStorageConfig config;
     private boolean initialized = false;
@@ -63,9 +63,9 @@ public class LocalFileChunkStorage implements ChunkStorage {
             Files.createDirectories(basePath.getParent());
 
             if (config.isUseMmap()) {
-                String dataFilePath = config.getBasePath() + ".data";
-                this.mmapStore = MMapDocumentStore.open(dataFilePath);
-                logger.debug("已初始化 mmap 存储: {}", dataFilePath);
+                int shardCount = Math.max(1, config.getMmapShardCount());
+                this.mmapStore = ShardedMMapStore.open(config.getBasePath(), shardCount);
+                logger.debug("已初始化分片 mmap 存储: basePath={}, shards={}", config.getBasePath(), shardCount);
             }
 
             if (config.isSharded()) {
@@ -255,7 +255,7 @@ public class LocalFileChunkStorage implements ChunkStorage {
      * 
      * @return mmap 存储实例
      */
-    public MMapDocumentStore getMMapStore() {
+    public ShardedMMapStore getMMapStore() {
         return mmapStore;
     }
 

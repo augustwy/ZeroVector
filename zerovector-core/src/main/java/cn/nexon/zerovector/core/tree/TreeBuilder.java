@@ -12,7 +12,6 @@ import cn.nexon.zerovector.core.hook.HookType;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
-import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import cn.nexon.zerovector.core.util.JsonUtils;
 import cn.nexon.zerovector.core.util.LLMExecutors;
 import cn.nexon.zerovector.core.util.StringUtils;
@@ -35,18 +34,16 @@ public class TreeBuilder {
     
     private final LLMProvider llmProvider;
     private final KeywordDictionary dictionary;
-    private final MMapDocumentStore store;
     private final HookExecutor hookExecutor;
     private final ExecutorService executor;
 
-    public TreeBuilder(LLMProvider llmProvider, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig) {
-        this(llmProvider, dictionary, store, concurrencyConfig, new DefaultHookExecutor());
+    public TreeBuilder(LLMProvider llmProvider, KeywordDictionary dictionary, ConcurrencyProperties concurrencyConfig) {
+        this(llmProvider, dictionary, concurrencyConfig, new DefaultHookExecutor());
     }
 
-    public TreeBuilder(LLMProvider llmProvider, KeywordDictionary dictionary, MMapDocumentStore store, ConcurrencyProperties concurrencyConfig, HookExecutor hookExecutor) {
+    public TreeBuilder(LLMProvider llmProvider, KeywordDictionary dictionary, ConcurrencyProperties concurrencyConfig, HookExecutor hookExecutor) {
         this.llmProvider = llmProvider;
         this.dictionary = dictionary;
-        this.store = store;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.executor = LLMExecutors.create(concurrencyConfig);
     }

@@ -18,12 +18,11 @@ import cn.nexon.zerovector.core.model.DocumentUploadResult;
 import cn.nexon.zerovector.core.model.NavigationResult;
 import cn.nexon.zerovector.core.model.SemanticTree;
 import cn.nexon.zerovector.core.navigator.HybridNavigator;
-import cn.nexon.zerovector.core.storage.MMapDocumentStore;
 import cn.nexon.zerovector.core.storage.ShardedTreeStorage;
 import cn.nexon.zerovector.core.storage.config.ChunkStorageConfig;
+import cn.nexon.zerovector.core.storage.local.LocalFileChunkStorage;
 import cn.nexon.zerovector.core.storage.config.DictionaryStorageConfig;
 import cn.nexon.zerovector.core.storage.config.DocumentCopyStorageConfig;
-import cn.nexon.zerovector.core.storage.local.LocalFileChunkStorage;
 import cn.nexon.zerovector.core.storage.local.LocalFileDictionaryStorage;
 import cn.nexon.zerovector.core.storage.local.LocalFileDocumentCopyStorage;
 import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
@@ -76,7 +75,7 @@ public class SemanticTreeManager {
     private final String treeStorageDir;
     private final boolean useShardedStorage;
 
-    private MMapDocumentStore documentStore;
+    private ChunkStorage chunkStore;
     private ShardedTreeStorage shardedTreeStorage;
     private SemanticTree semanticTree;
     private Navigator navigator;
@@ -210,9 +209,7 @@ public class SemanticTreeManager {
                 logger.debug("创建存储目录: {}", storagePath);
             }
 
-            if (chunkStorage instanceof LocalFileChunkStorage localChunkStorage) {
-                this.documentStore = localChunkStorage.getMMapStore();
-            }
+            this.chunkStore = chunkStorage;
 
             if (useShardedStorage) {
                 this.shardedTreeStorage = new ShardedTreeStorage(treeStorageDir);
@@ -225,9 +222,9 @@ public class SemanticTreeManager {
             }
 
             if (this.semanticTree != null) {
-                this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
+                this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, hookExecutor);
                 this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), 
-                    llmProvider, documentStore, hookExecutor);
+                    llmProvider, chunkStore, hookExecutor);
                 logger.debug("已加载已保存的语义树");
             }
         } catch (IOException e) {
@@ -272,8 +269,8 @@ public class SemanticTreeManager {
             this.semanticTree = buildResult.tree();
             totalStats.merge(buildResult.llmUsageStats());
 
-            this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
-            this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, documentStore, hookExecutor);
+            this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, hookExecutor);
+            this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStore, hookExecutor);
 
             long duration = System.currentTimeMillis() - startTime;
             hookExecutor.executeHooks(HookType.TREE_BUILD_END,
@@ -340,7 +337,7 @@ public class SemanticTreeManager {
     ) {}
 
     private TreeBuilder.TreeBuildResult buildTreeInternal(Map<String, DocumentComprehendResult> comprehendResultMap, Map<String, DocumentChunk> chunkMap) {
-        TreeBuilder builder = new TreeBuilder(llmProvider, getKeywordDictionary(), documentStore, concurrencyProperties, hookExecutor);
+        TreeBuilder builder = new TreeBuilder(llmProvider, getKeywordDictionary(), concurrencyProperties, hookExecutor);
 
         if (this.semanticTree == null || this.semanticTree.rootNode() == null) {
             return builder.build(comprehendResultMap, chunkMap);
@@ -511,8 +508,8 @@ public class SemanticTreeManager {
     }
 
     private void updateNavigators() {
-        this.navigator = new Navigator(semanticTree, llmProvider, documentStore, hookExecutor);
-        this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, documentStore, hookExecutor);
+        this.navigator = new Navigator(semanticTree, llmProvider, chunkStorage, hookExecutor);
+        this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStorage, hookExecutor);
     }
 
     /**

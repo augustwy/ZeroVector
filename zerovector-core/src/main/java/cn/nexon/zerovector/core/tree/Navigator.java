@@ -10,7 +10,7 @@ import cn.nexon.zerovector.core.hook.HookType;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.model.*;
 import cn.nexon.zerovector.core.util.JsonUtils;
-import cn.nexon.zerovector.core.storage.MMapDocumentStore;
+import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,20 +30,20 @@ public class Navigator {
     
     private final SemanticTree semanticTree;
     private final LLMProvider llmService;
-    private final MMapDocumentStore documentStore;
+    private final ChunkStorage chunkStore;
     private final HookExecutor hookExecutor;
-    
+
     private TreeNode currentNode;
     private final List<NavigationPath> navigationHistory;
-    
-    public Navigator(SemanticTree semanticTree, LLMProvider llmService, MMapDocumentStore documentStore) {
-        this(semanticTree, llmService, documentStore, new DefaultHookExecutor());
+
+    public Navigator(SemanticTree semanticTree, LLMProvider llmService, ChunkStorage chunkStore) {
+        this(semanticTree, llmService, chunkStore, new DefaultHookExecutor());
     }
 
-    public Navigator(SemanticTree semanticTree, LLMProvider llmService, MMapDocumentStore documentStore, HookExecutor hookExecutor) {
+    public Navigator(SemanticTree semanticTree, LLMProvider llmService, ChunkStorage chunkStore, HookExecutor hookExecutor) {
         this.semanticTree = semanticTree;
         this.llmService = llmService;
-        this.documentStore = documentStore;
+        this.chunkStore = chunkStore;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
         this.currentNode = semanticTree.rootNode();
         this.navigationHistory = new CopyOnWriteArrayList<>();
@@ -187,14 +187,14 @@ public class Navigator {
     }
     
     private List<DocumentChunk> loadChunksFromNode(TreeNode node) {
-        return node.chunkIds().stream()
+        return node.chunkIds().parallelStream()
             .map(chunkId -> loadChunkWithContent(chunkId))
             .filter(Objects::nonNull)
             .collect(Collectors.toList());
     }
     
     private List<DocumentChunk> loadChunksByIds(List<String> chunkIds) {
-        return chunkIds.stream()
+        return chunkIds.parallelStream()
             .map(chunkId -> loadChunkWithContent(chunkId))
             .filter(Objects::nonNull)
             .collect(Collectors.toList());
@@ -208,7 +208,7 @@ public class Navigator {
         
         if (chunk.isFilePathBased()) {
             try {
-                String content = documentStore.getChunkContent(chunk);
+                String content = chunkStore.getChunkContent(chunk.id());
                 return new DocumentChunk(
                     chunk.id(),
                     content,

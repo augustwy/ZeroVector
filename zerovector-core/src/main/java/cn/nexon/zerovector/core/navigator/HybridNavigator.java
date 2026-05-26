@@ -12,7 +12,7 @@ import cn.nexon.zerovector.core.hook.HookType;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
-import cn.nexon.zerovector.core.storage.MMapDocumentStore;
+import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,19 +36,19 @@ public class HybridNavigator {
     private final SemanticTree tree;
     private final KeywordDictionary dictionary;
     private final LLMProvider llm;
-    private final MMapDocumentStore store;
+    private final ChunkStorage chunkStore;
     private final HookExecutor hookExecutor;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, MMapDocumentStore store) {
-        this(tree, dictionary, llm, store, new DefaultHookExecutor());
+    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, ChunkStorage chunkStore) {
+        this(tree, dictionary, llm, chunkStore, new DefaultHookExecutor());
     }
 
-    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, MMapDocumentStore store, HookExecutor hookExecutor) {
+    public HybridNavigator(SemanticTree tree, KeywordDictionary dictionary, LLMProvider llm, ChunkStorage chunkStore, HookExecutor hookExecutor) {
         this.tree = tree;
         this.dictionary = dictionary;
         this.llm = llm;
-        this.store = store;
+        this.chunkStore = chunkStore;
         this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
     }
     
@@ -309,7 +309,7 @@ public class HybridNavigator {
     }
     
     private List<DocumentChunk> loadChunks(List<String> chunkIds) {
-        return chunkIds.stream()
+        return chunkIds.parallelStream()
             .map(this::resolveChunk)
             .filter(java.util.Objects::nonNull)
             .collect(Collectors.toList());
@@ -318,13 +318,13 @@ public class HybridNavigator {
     private DocumentChunk resolveChunk(String chunkId) {
         DocumentChunk chunk = tree.getChunk(chunkId);
         if (chunk == null) {
-            String content = store.getChunk(chunkId);
+            String content = chunkStore.getChunkContent(chunkId);
             return content != null ? DocumentChunk.withContent(chunkId, content, null, Map.of()) : null;
         }
 
         if (chunk.isFilePathBased()) {
             try {
-                String content = store.getChunkContent(chunk);
+                String content = chunkStore.getChunkContent(chunk.id());
                 return new DocumentChunk(chunk.id(), content, chunk.summary(),
                     chunk.filePath(), chunk.md5(), chunk.metadata());
             } catch (Exception e) {
@@ -333,7 +333,7 @@ public class HybridNavigator {
         }
 
         if (chunk.content() == null || chunk.content().isEmpty()) {
-            String content = store.getChunk(chunkId);
+            String content = chunkStore.getChunkContent(chunkId);
             if (content != null) {
                 return new DocumentChunk(chunk.id(), content, chunk.summary(),
                     chunk.filePath(), chunk.md5(), chunk.metadata());
