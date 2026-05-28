@@ -17,8 +17,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -77,23 +79,46 @@ public class ShardedTreeStorage implements AutoCloseable {
      */
     public void saveTree(SemanticTree tree) throws IOException {
         synchronized (this) {
+            // [CRITICAL] 必须先物化节点和分片为普通 HashMap，再清空索引。
+            // LazyNodeMap/LazyChunkMap 依赖 nodeShards/chunkShards 做懒加载，
+            // 如果先 clear 再遍历，懒加载返回空，导致数据丢失。
+            Map<String, TreeNode> nodes = new HashMap<>(tree.nodes());
+            Map<String, DocumentChunk> chunks = new HashMap<>(tree.chunks());
+
+            // 保存旧引用用于后续清理孤立文件
+            Set<String> oldNodeShardFiles = new HashSet<>(nodeShards.values());
+            Set<String> oldChunkShardFiles = new HashSet<>(chunkShards.values());
+
             // 清空现有索引
             nodeShards.clear();
             chunkShards.clear();
-            
+
             // 保存根节点
             if (tree.rootNode() != null) {
                 saveRootNode(tree.rootNode());
             }
-            
-            // 分片保存节点
-            saveNodesInShards(tree.nodes());
-            
-            // 分片保存文档块
-            saveChunksInShards(tree.chunks());
-            
+
+            // 分片保存节点和文档块
+            saveNodesInShards(nodes);
+            saveChunksInShards(chunks);
+
             // 保存元数据
             saveMetadata();
+
+            // 清理不再引用的孤立 shard 文件
+            Set<String> newNodeShardFiles = new HashSet<>(nodeShards.values());
+            Set<String> newChunkShardFiles = new HashSet<>(chunkShards.values());
+
+            for (String oldFile : oldNodeShardFiles) {
+                if (!newNodeShardFiles.contains(oldFile)) {
+                    deleteShardFile(oldFile);
+                }
+            }
+            for (String oldFile : oldChunkShardFiles) {
+                if (!newChunkShardFiles.contains(oldFile)) {
+                    deleteShardFile(oldFile);
+                }
+            }
         }
     }
     
@@ -388,6 +413,18 @@ public class ShardedTreeStorage implements AutoCloseable {
         return true;
     }
     
+    /**
+     * 删除分片文件
+     */
+    private void deleteShardFile(String fileName) {
+        try {
+            Path filePath = Paths.get(storageDir, fileName);
+            Files.deleteIfExists(filePath);
+        } catch (IOException e) {
+            logger.warn("清理孤立分片文件失败: {}", fileName, e);
+        }
+    }
+
     @Override
     public void close() throws IOException {
         nodeCache.invalidateAll();

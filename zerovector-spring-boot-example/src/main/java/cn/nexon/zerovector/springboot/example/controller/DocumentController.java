@@ -1,7 +1,12 @@
 package cn.nexon.zerovector.springboot.example.controller;
 
+import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMUsageStats;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
+import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.DocumentUploadResult;
+import cn.nexon.zerovector.core.util.FileUtils;
+import cn.nexon.zerovector.springboot.SearchResult;
 import cn.nexon.zerovector.springboot.SemanticHub;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -210,7 +215,7 @@ public class DocumentController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            SemanticHub.SearchResult searchResult = semanticHub.search(query);
+            SearchResult searchResult = semanticHub.search(query);
 
             response.put("success", true);
             response.put("query", query);
@@ -229,6 +234,72 @@ public class DocumentController {
         } catch (Exception e) {
             response.put("success", false);
             response.put("message", "查询失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
+    }
+
+    @PostMapping("/ask")
+    public ResponseEntity<Map<String, Object>> ask(@RequestParam("query") String query) {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            if (query == null || query.trim().isEmpty()) {
+                response.put("success", false);
+                response.put("message", "问题不能为空");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            SearchResult searchResult = semanticHub.search(query);
+            List<DocumentChunk> chunks = searchResult.documents();
+
+            if (chunks == null || chunks.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "未找到相关文档");
+                return ResponseEntity.ok(response);
+            }
+
+            String prompt = """
+                根据以下文档内容回答用户的问题。如果文档中没有相关信息，请如实说明。
+
+                用户问题：%s
+
+                相关文档：
+                %s
+                请用中文回答。
+                """.formatted(query, searchResult.toDocumentText());
+
+            LLMResponse llmResponse = semanticHub.getLlmProvider()
+                .chat(prompt, SmartCacheStrategy.RequestType.GENERATE_SUMMARY);
+
+            LLMUsageStats totalStats = new LLMUsageStats();
+            totalStats.add(llmResponse);
+            if (searchResult.llmUsageStats() != null) {
+                totalStats.merge(searchResult.llmUsageStats());
+            }
+
+            List<Map<String, Object>> sources = new ArrayList<>();
+            for (int i = 0; i < chunks.size(); i++) {
+                DocumentChunk c = chunks.get(i);
+                sources.add(Map.of("index", i + 1, "id", c.id(), "summary", c.summary(), "filePath", c.filePath() != null ? c.filePath() : ""));
+            }
+
+            response.put("success", true);
+            response.put("query", query);
+            response.put("answer", llmResponse.content());
+            response.put("sources", sources);
+            response.put("sourceCount", sources.size());
+            response.put("searchReasoning", searchResult.reasoning());
+
+            Map<String, Object> llmStats = toLlmStatsMap(totalStats);
+            if (llmStats != null) {
+                response.put("llmUsageStats", llmStats);
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "问答失败: " + e.getMessage());
             return ResponseEntity.internalServerError().body(response);
         }
     }

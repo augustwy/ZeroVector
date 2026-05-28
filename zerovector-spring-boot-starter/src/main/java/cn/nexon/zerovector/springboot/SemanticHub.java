@@ -5,12 +5,10 @@ import cn.nexon.zerovector.core.SemanticTreeManager;
 import cn.nexon.zerovector.core.ai.CacheConfig;
 import cn.nexon.zerovector.core.ai.CacheStatistics;
 import cn.nexon.zerovector.core.ai.CachedLLMProvider;
-import cn.nexon.zerovector.core.ai.LLMUsageStats;
+import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.model.Document;
-import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.DocumentUploadResult;
-import cn.nexon.zerovector.core.model.NavigationPath;
 import cn.nexon.zerovector.core.model.NavigationResult;
 import org.springframework.stereotype.Component;
 
@@ -54,14 +52,7 @@ public class SemanticHub {
     public SearchResult search(String query, String knowledgeBaseName) {
         SemanticTreeManager manager = getTargetManager(knowledgeBaseName);
         NavigationResult result = manager.navigate(query);
-        
-        return new SearchResult(
-            query,
-            result.documents(),
-            result.reasoning(),
-            result.path(),
-            result.llmUsageStats()
-        );
+        return new SearchResultImpl(query, manager.getChunkStorage(), result);
     }
     
     /**
@@ -279,21 +270,8 @@ public class SemanticHub {
         getCachedProvider().ifPresent(CachedLLMProvider::logStatistics);
     }
     
-    /**
-     * 搜索结果
-     * 包含查询结果和 LLM 调用统计信息
-     *
-     * @param query 查询字符串
-     * @param documents 文档列表
-     * @param reasoning 推理说明
-     * @param path 导航路径
-     * @param llmUsageStats LLM 调用统计
-     */
-    public record SearchResult(
-        String query,
-        List<DocumentChunk> documents,
-        String reasoning,
-        List<NavigationPath> path,
-        LLMUsageStats llmUsageStats
-    ) {}
+    public LLMProvider getLlmProvider() {
+        return knowledgeBaseManager.getLlmProvider();
+    }
+
 }

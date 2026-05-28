@@ -190,12 +190,24 @@ public class LocalFileChunkStorage implements ChunkStorage {
             return false;
         }
 
-        return chunkCache.containsKey(chunkId);
+        if (chunkCache.containsKey(chunkId)) {
+            return true;
+        }
+
+        if (shardedStorage != null && shardedStorage.getChunkShardIndex().containsKey(chunkId)) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override
     public Set<String> getAllChunkIds() {
-        return Collections.unmodifiableSet(new HashSet<>(chunkCache.keySet()));
+        Set<String> ids = new HashSet<>(chunkCache.keySet());
+        if (shardedStorage != null) {
+            ids.addAll(shardedStorage.getChunkShardIndex().keySet());
+        }
+        return Collections.unmodifiableSet(ids);
     }
 
     @Override
