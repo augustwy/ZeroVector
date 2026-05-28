@@ -4,6 +4,7 @@ import cn.nexon.zerovector.core.KnowledgeBaseManager;
 import cn.nexon.zerovector.core.ai.CacheConfig;
 import cn.nexon.zerovector.core.ai.CachedLLMProvider;
 import cn.nexon.zerovector.core.ai.LLMProvider;
+import cn.nexon.zerovector.core.ai.RateLimitedLLMProvider;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.hook.LifecycleHook;
@@ -71,6 +72,11 @@ public class ZeroVectorAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(name = "cachedLLMProvider")
         LLMProvider cachedLLMProvider(LLMProvider delegate, ZeroVectorProperties config) {
+            if (config.getRateLimit().isEnabled()) {
+                ZeroVectorProperties.RateLimit rl = config.getRateLimit();
+                logger.info("LLM 限流已启用: {} 次 / {} 秒", rl.getMaxRequests(), rl.getWindowSeconds());
+                delegate = new RateLimitedLLMProvider(delegate, rl.getMaxRequests(), rl.getWindowSeconds());
+            }
             return createCachedLLMProvider(delegate, config);
         }
     }

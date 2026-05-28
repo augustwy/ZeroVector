@@ -4,6 +4,7 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.ai.LLMUsageStats;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.exception.NavigationException;
 import cn.nexon.zerovector.core.exception.PromptLoadException;
 import cn.nexon.zerovector.core.hook.HookContext;
@@ -70,7 +71,7 @@ public class HybridNavigator {
             
             try {
                 String keywordsPrompt = LLMPromptTemplates.extractQueryKeywords(query);
-                LLMResponse keywordsResponse = llm.extractQueryKeywords(keywordsPrompt);
+                LLMResponse keywordsResponse = llm.chat(keywordsPrompt, SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS);
                 stats.add(keywordsResponse);
 
                 List<String> extractedKeywords = parseKeywordsResponse(keywordsResponse.content());
@@ -143,7 +144,7 @@ public class HybridNavigator {
 
             String prompt = buildNavigationPrompt(query, current);
             
-            LLMResponse response = llm.decideNavigation(prompt);
+            LLMResponse response = llm.chat(prompt, SmartCacheStrategy.RequestType.DECIDE_NAVIGATION);
             stats.add(response);
             
             NavigationAction action = parseNavigationResponse(response.content(), getCurrentChildNodes(current));

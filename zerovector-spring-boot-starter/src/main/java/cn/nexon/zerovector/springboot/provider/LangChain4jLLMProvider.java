@@ -2,6 +2,7 @@ package cn.nexon.zerovector.springboot.provider;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.util.MD5Util;
 import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
@@ -27,6 +28,24 @@ public class LangChain4jLLMProvider implements LLMProvider {
         this.chatModel = chatModel;
     }
 
+    @Override
+    public LLMResponse chat(String prompt, SmartCacheStrategy.RequestType type) {
+        if (type == SmartCacheStrategy.RequestType.GENERATE_SUMMARY) {
+            String cacheKey = "summary_" + MD5Util.calculateMD5(prompt);
+            String cached = summaryCache.getIfPresent(cacheKey);
+            if (cached != null) {
+                return LLMResponse.success(cached, 0, 0, 0);
+            }
+            LLMResponse response = execute(prompt, "生成摘要");
+            if (response.success()) {
+                summaryCache.put(cacheKey, response.content());
+            }
+            return response;
+        }
+        String opName = type.name().toLowerCase().replace('_', ' ');
+        return execute(prompt, opName);
+    }
+
     private LLMResponse execute(String prompt, String operationName) {
         long startTime = System.currentTimeMillis();
         try {
@@ -39,54 +58,5 @@ public class LangChain4jLLMProvider implements LLMProvider {
             logger.error("{}失败", operationName, e);
             return LLMResponse.failure(e.getMessage(), duration);
         }
-    }
-
-    @Override
-    public LLMResponse comprehendChunk(String prompt) {
-        return execute(prompt, "理解文档块");
-    }
-
-    @Override
-    public LLMResponse generateSummary(String prompt) {
-        String cacheKey = "summary_" + MD5Util.calculateMD5(prompt);
-        String cached = summaryCache.getIfPresent(cacheKey);
-        if (cached != null) {
-            return LLMResponse.success(cached, 0, 0, 0);
-        }
-        LLMResponse response = execute(prompt, "生成摘要");
-        if (response.success()) {
-            summaryCache.put(cacheKey, response.content());
-        }
-        return response;
-    }
-
-    @Override
-    public LLMResponse clusterDocuments(String prompt) {
-        return execute(prompt, "聚类文档");
-    }
-
-    @Override
-    public LLMResponse extractKeywords(String prompt) {
-        return execute(prompt, "提取关键词");
-    }
-
-    @Override
-    public LLMResponse extractEntities(String prompt) {
-        return execute(prompt, "提取实体");
-    }
-
-    @Override
-    public LLMResponse generateExampleQuestions(String prompt) {
-        return execute(prompt, "生成示例问题");
-    }
-
-    @Override
-    public LLMResponse decideNavigation(String prompt) {
-        return execute(prompt, "导航决策");
-    }
-
-    @Override
-    public LLMResponse extractQueryKeywords(String prompt) {
-        return execute(prompt, "提取查询关键字");
     }
 }

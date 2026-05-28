@@ -4,6 +4,7 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.ai.LLMUsageStats;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehendResult;
 import cn.nexon.zerovector.core.hook.HookContext;
@@ -261,7 +262,7 @@ public class TreeBuilder {
             .toList();
         
         String clusterPrompt = LLMPromptTemplates.clusterDocumentChunks(summaries);
-        LLMResponse response = llmProvider.clusterDocuments(clusterPrompt);
+        LLMResponse response = llmProvider.chat(clusterPrompt, SmartCacheStrategy.RequestType.CLUSTER_DOCUMENTS);
         stats.add(response);
         
         logger.debug("聚类操作完成");
@@ -345,11 +346,11 @@ public class TreeBuilder {
         String examplesPrompt = LLMPromptTemplates.generateExampleQuestions(summariesText);
 
         CompletableFuture<LLMResponse> keywordsFuture = CompletableFuture.supplyAsync(
-            () -> llmProvider.extractKeywords(keywordsPrompt), executor);
+            () -> llmProvider.chat(keywordsPrompt, SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS), executor);
         CompletableFuture<LLMResponse> entitiesFuture = CompletableFuture.supplyAsync(
-            () -> llmProvider.extractEntities(entitiesPrompt), executor);
+            () -> llmProvider.chat(entitiesPrompt, SmartCacheStrategy.RequestType.EXTRACT_ENTITIES), executor);
         CompletableFuture<LLMResponse> examplesFuture = CompletableFuture.supplyAsync(
-            () -> llmProvider.generateExampleQuestions(examplesPrompt), executor);
+            () -> llmProvider.chat(examplesPrompt, SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS), executor);
 
         CompletableFuture.allOf(keywordsFuture, entitiesFuture, examplesFuture).join();
 

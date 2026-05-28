@@ -1,5 +1,5 @@
 server:
-  port: 8081
+  port: 8080
 
 spring:
   ai:
@@ -17,11 +17,16 @@ zerovector:
   use-sharded-storage: true
   shard-size: 100
   model:
-    clustering: hunyuan-turbos-latest
-    navigation: hunyuan-turbos-latest
+    heavy: hunyuan-turbos-latest
+    light: hunyuan-lite
+    fast: hunyuan-turbos-latest
   concurrency:
     max-concurrent-requests: 1
     requests-per-second: 1
+  rate-limit:
+    enabled: true
+    max-requests: 5
+    window-seconds: 60
   hook:
     enabled: true
     hooks:

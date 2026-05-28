@@ -1,78 +1,16 @@
 package cn.nexon.zerovector.core.ai;
 
-import java.util.List;
-
+/**
+ * LLM 调用抽象。整个系统通过这一个方法调用大模型，缓存策略通过 RequestType 区分。
+ */
 public interface LLMProvider {
-    
-    /**
-     * 理解文档块
-     * 使用LLM分析文档块内容，提取摘要、关键词、实体和示例问题
-     * 
-     * @param prompt 包含文档块内容和上下文的提示词
-     * @return LLM返回的响应，包含内容、token消耗和耗时信息
-     */
-    LLMResponse comprehendChunk(String prompt);
-    
-    /**
-     * 生成摘要
-     * 基于多个文档块的摘要生成整体摘要
-     * 
-     * @param prompt 包含文档标题和多个文档块摘要的提示词
-     * @return LLM生成的整体摘要，包含token消耗和耗时信息
-     */
-    LLMResponse generateSummary(String prompt);
-    
-    /**
-     * 聚类文档
-     * 将多个文档块按照语义相似性进行聚类分组
-     * 
-     * @param prompt 包含多个文档块摘要的提示词
-     * @return LLM返回的聚类结果，包含token消耗和耗时信息
-     */
-    LLMResponse clusterDocuments(String prompt);
-    
-    /**
-     * 提取关键词
-     * 从文本内容中提取关键词
-     * 
-     * @param prompt 包含文本内容的提示词
-     * @return LLM返回的关键词列表，包含token消耗和耗时信息
-     */
-    LLMResponse extractKeywords(String prompt);
-    
-    /**
-     * 提取实体
-     * 从文本内容中提取命名实体（如人名、地名、组织名等）
-     * 
-     * @param prompt 包含文本内容的提示词
-     * @return LLM返回的实体列表，包含token消耗和耗时信息
-     */
-    LLMResponse extractEntities(String prompt);
-    
-    /**
-     * 生成示例问题
-     * 基于文本内容生成可能的查询问题
-     * 
-     * @param prompt 包含文本内容的提示词
-     * @return LLM返回的示例问题列表，包含token消耗和耗时信息
-     */
-    LLMResponse generateExampleQuestions(String prompt);
-    
-    /**
-     * 决定导航
-     * 根据查询和当前节点的子节点信息，决定下一步导航方向
-     * 
-     * @param prompt 包含查询、当前节点信息和子节点描述的提示词
-     * @return LLM返回的导航决策，包含token消耗和耗时信息
-     */
-    LLMResponse decideNavigation(String prompt);
 
     /**
-     * 提取查询关键字
-     * 从用户查询中提取重要的关键词
-     * 
-     * @param prompt 包含用户查询的提示词
-     * @return LLM返回的关键词列表，包含token消耗和耗时信息
+     * 调用 LLM。
+     *
+     * @param prompt 提示词
+     * @param type   请求类型，用于缓存策略区分
+     * @return LLM 响应（内容 + token 消耗 + 耗时）
      */
-    LLMResponse extractQueryKeywords(String prompt);
+    LLMResponse chat(String prompt, SmartCacheStrategy.RequestType type);
 }

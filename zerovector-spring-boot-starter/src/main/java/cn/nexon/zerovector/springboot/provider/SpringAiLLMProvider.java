@@ -2,6 +2,7 @@ package cn.nexon.zerovector.springboot.provider;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.util.MD5Util;
 import cn.nexon.zerovector.springboot.autoconfigure.ZeroVectorProperties;
 import org.slf4j.Logger;
@@ -22,8 +23,9 @@ public class SpringAiLLMProvider implements LLMProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(SpringAiLLMProvider.class);
 
-    private final ChatClient clusteringClient;
-    private final ChatClient navigationClient;
+    private final ChatClient heavyClient;
+    private final ChatClient lightClient;
+    private final ChatClient fastClient;
 
     private final Cache<String, String> summaryCache = Caffeine.newBuilder()
             .maximumSize(1000)
@@ -34,8 +36,33 @@ public class SpringAiLLMProvider implements LLMProvider {
         ChatOptions.Builder builder = ChatOptions.builder();
         if (model.maxTokens() > 0) builder.maxTokens(model.maxTokens());
         builder.temperature(model.temperature() >= 0 ? model.temperature() : 0.7);
-        this.clusteringClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.clustering())).build();
-        this.navigationClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.navigation())).build();
+        this.heavyClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.heavy())).build();
+        this.lightClient = ChatClient.builder(chatModel).defaultOptions(builder.model(model.light())).build();
+        this.fastClient   = ChatClient.builder(chatModel).defaultOptions(builder.model(model.fast())).build();
+    }
+
+    @Override
+    public LLMResponse chat(String prompt, SmartCacheStrategy.RequestType type) {
+        if (type == SmartCacheStrategy.RequestType.GENERATE_SUMMARY) {
+            String cacheKey = "summary_" + MD5Util.calculateMD5(prompt);
+            String cached = summaryCache.getIfPresent(cacheKey);
+            if (cached != null) {
+                return LLMResponse.success(cached, 0, 0, 0);
+            }
+            LLMResponse response = execute(heavyClient, prompt, "生成摘要");
+            if (response.success()) {
+                summaryCache.put(cacheKey, response.content());
+            }
+            return response;
+        }
+
+        ChatClient client = switch (type) {
+            case COMPREHEND_CHUNK, CLUSTER_DOCUMENTS, GENERATE_SUMMARY -> heavyClient;
+            case EXTRACT_KEYWORDS, EXTRACT_ENTITIES, GENERATE_EXAMPLE_QUESTIONS -> lightClient;
+            case DECIDE_NAVIGATION, EXTRACT_QUERY_KEYWORDS -> fastClient;
+        };
+        String opName = type.name().toLowerCase().replace('_', ' ');
+        return execute(client, prompt, opName);
     }
 
     private LLMResponse execute(ChatClient client, String prompt, String operationName) {
@@ -53,54 +80,5 @@ public class SpringAiLLMProvider implements LLMProvider {
             logger.error("{}失败", operationName, e);
             return LLMResponse.failure(e.getMessage(), duration);
         }
-    }
-
-    @Override
-    public LLMResponse comprehendChunk(String prompt) {
-        return execute(clusteringClient, prompt, "理解文档块");
-    }
-
-    @Override
-    public LLMResponse generateSummary(String prompt) {
-        String cacheKey = "summary_" + MD5Util.calculateMD5(prompt);
-        String cached = summaryCache.getIfPresent(cacheKey);
-        if (cached != null) {
-            return LLMResponse.success(cached, 0, 0, 0);
-        }
-        LLMResponse response = execute(clusteringClient, prompt, "生成摘要");
-        if (response.success()) {
-            summaryCache.put(cacheKey, response.content());
-        }
-        return response;
-    }
-
-    @Override
-    public LLMResponse clusterDocuments(String prompt) {
-        return execute(clusteringClient, prompt, "聚类文档");
-    }
-
-    @Override
-    public LLMResponse extractKeywords(String prompt) {
-        return execute(clusteringClient, prompt, "提取关键词");
-    }
-
-    @Override
-    public LLMResponse extractEntities(String prompt) {
-        return execute(clusteringClient, prompt, "提取实体");
-    }
-
-    @Override
-    public LLMResponse generateExampleQuestions(String prompt) {
-        return execute(clusteringClient, prompt, "生成示例问题");
-    }
-
-    @Override
-    public LLMResponse decideNavigation(String prompt) {
-        return execute(navigationClient, prompt, "导航决策");
-    }
-
-    @Override
-    public LLMResponse extractQueryKeywords(String prompt) {
-        return execute(clusteringClient, prompt, "提取查询关键字");
     }
 }

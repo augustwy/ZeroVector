@@ -4,6 +4,7 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.ai.LLMUsageStats;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.hook.HookContext;
 import cn.nexon.zerovector.core.hook.HookExecutor;
 import cn.nexon.zerovector.core.hook.HookType;
@@ -113,7 +114,7 @@ public class Navigator {
             childNodeDescriptions
         );
         
-        LLMResponse response = llmService.decideNavigation(navigationPrompt);
+        LLMResponse response = llmService.chat(navigationPrompt, SmartCacheStrategy.RequestType.DECIDE_NAVIGATION);
         stats.add(response);
         
         NavigationAction action = parseNavigationResponse(response.content(), childNodes);

@@ -38,7 +38,7 @@ public class ZeroVectorProperties {
     
     private int shardSize = 100;
     
-    private Model model = new Model("gpt-4o-mini", "gpt-4o", 0.7, -1);
+    private Model model = new Model("gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini", 0.7, -1);
 
     @Valid
     private ConcurrencyProperties concurrency = new ConcurrencyProperties();
@@ -54,6 +54,9 @@ public class ZeroVectorProperties {
 
     @Valid
     private Storage storage = new Storage();
+
+    @Valid
+    private RateLimit rateLimit = new RateLimit();
 
     public boolean isEnabled() {
         return enabled;
@@ -132,11 +135,23 @@ public class ZeroVectorProperties {
         this.storage = storage;
     }
 
+    public RateLimit getRateLimit() {
+        return rateLimit;
+    }
+
+    public void setRateLimit(RateLimit rateLimit) {
+        this.rateLimit = rateLimit;
+    }
+
     /**
      * 模型配置
      */
-    public record Model(String clustering, String navigation, double temperature, int maxTokens) {
-
+    /**
+     * @param heavy  离线复杂任务：文档理解、聚类、摘要
+     * @param light  离线简单任务：关键词、实体、示例问题提取
+     * @param fast   在线快速任务：导航决策、查询关键词
+     */
+    public record Model(String heavy, String light, String fast, double temperature, int maxTokens) {
     }
 
     /**
@@ -497,6 +512,39 @@ public class ZeroVectorProperties {
 
         public void setExtended(Map<String, Object> extended) {
             this.extended = extended;
+        }
+    }
+
+    /**
+     * LLM 限流配置（滑动窗口）
+     */
+    public static class RateLimit {
+        private boolean enabled = false;
+        private int maxRequests = 5;
+        private int windowSeconds = 60;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getMaxRequests() {
+            return maxRequests;
+        }
+
+        public void setMaxRequests(int maxRequests) {
+            this.maxRequests = maxRequests;
+        }
+
+        public int getWindowSeconds() {
+            return windowSeconds;
+        }
+
+        public void setWindowSeconds(int windowSeconds) {
+            this.windowSeconds = windowSeconds;
         }
     }
 

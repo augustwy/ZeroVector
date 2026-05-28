@@ -4,6 +4,7 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
 import cn.nexon.zerovector.core.ai.LLMUsageStats;
+import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.exception.DocumentProcessingException;
 import cn.nexon.zerovector.core.exception.PromptLoadException;
 import cn.nexon.zerovector.core.hook.HookContext;
@@ -21,10 +22,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.file.Paths;
 import java.util.Map;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -133,7 +135,16 @@ public class DocumentComprehender {
     
     private DocumentComprehendResult comprehendSmallFile(String filePath, Document document, LLMUsageStats stats) {
         String content = readSmallFile(filePath);
+        convertToUtf8(filePath);
         return processContent(content, document, stats);
+    }
+
+    private void convertToUtf8(String filePath) {
+        try {
+            FileUtils.convertToUtf8(Paths.get(filePath));
+        } catch (IOException e) {
+            logger.warn("文件转 UTF-8 失败: {}", filePath, e);
+        }
     }
     
     private DocumentComprehendResult comprehendLargeFile(String filePath, Document document, long fileSize, LLMUsageStats stats) {
@@ -141,6 +152,8 @@ public class DocumentComprehender {
         List<String> allEntities = new ArrayList<>();
         List<String> allQuestions = new ArrayList<>();
         StringBuilder accumulatedSummary = new StringBuilder();
+
+        Charset charset = detectFileCharset(filePath);
 
         try (RandomAccessFile raf = new RandomAccessFile(filePath, "r");
                 FileChannel channel = raf.getChannel()) {
@@ -150,18 +163,20 @@ public class DocumentComprehender {
             int totalChunks = (int) ((fileSize + maxChunkSize - 1) / maxChunkSize);
 
             while (position < fileSize) {
-                ChunkProcessingResult chunkResult = processFileChunk(channel, position, fileSize, accumulatedSummary, allKeywordDefinitions, allEntities, allQuestions, chunkIndex, totalChunks, stats);
-                
+                ChunkProcessingResult chunkResult = processFileChunk(channel, position, fileSize, accumulatedSummary, allKeywordDefinitions, allEntities, allQuestions, chunkIndex, totalChunks, stats, charset);
+
                 accumulatedSummary.append(chunkResult.summary()).append(" ");
                 position += chunkResult.chunkSize();
                 chunkIndex++;
-                
+
                 logger.debug("处理文档块 {}/{}", chunkIndex, totalChunks);
             }
 
             String finalSummary = generateFinalSummary(document.title(), accumulatedSummary.toString(), stats);
 
             logger.debug("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
+
+            convertToUtf8(filePath);
 
             return new DocumentComprehendResult(
                     finalSummary,
@@ -173,11 +188,21 @@ public class DocumentComprehender {
             throw new DocumentProcessingException(document.id(), "readFile", e);
         }
     }
+
+    private Charset detectFileCharset(String filePath) {
+        try {
+            return FileUtils.detectCharset(Paths.get(filePath));
+        } catch (IOException e) {
+            logger.warn("编码检测失败，回退到 UTF-8: {}", filePath, e);
+            return Charset.forName("UTF-8");
+        }
+    }
     
-    private ChunkProcessingResult processFileChunk(FileChannel channel, long position, long fileSize, 
-            StringBuilder accumulatedSummary, List<KeywordDefinition> allKeywordDefinitions, 
-            List<String> allEntities, List<String> allQuestions, int chunkIndex, int totalChunks, LLMUsageStats stats) throws IOException {
-        
+    private ChunkProcessingResult processFileChunk(FileChannel channel, long position, long fileSize,
+            StringBuilder accumulatedSummary, List<KeywordDefinition> allKeywordDefinitions,
+            List<String> allEntities, List<String> allQuestions, int chunkIndex, int totalChunks, LLMUsageStats stats,
+            Charset charset) throws IOException {
+
         long remaining = fileSize - position;
         int chunkSize = (int) Math.min(maxChunkSize, remaining);
         long mapSize = Math.min(chunkSize, Integer.MAX_VALUE);
@@ -188,7 +213,7 @@ public class DocumentComprehender {
                 mapSize);
 
         try {
-            String chunk = readMappedBuffer(buffer);
+            String chunk = readMappedBuffer(buffer, charset);
             
             ChunkComprehendResult comprehendResult = comprehendChunkWithLLM(
                 chunk, accumulatedSummary.toString(), allKeywordDefinitions, chunkIndex, totalChunks, stats);
@@ -206,10 +231,10 @@ public class DocumentComprehender {
         }
     }
     
-    private String readMappedBuffer(MappedByteBuffer buffer) {
+    private String readMappedBuffer(MappedByteBuffer buffer, Charset charset) {
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
+        return new String(bytes, charset);
     }
     
     private ChunkComprehendResult comprehendChunkWithLLM(String chunk, String previousSummary, 
@@ -219,7 +244,7 @@ public class DocumentComprehender {
         String prompt = buildComprehendPrompt(context, chunkIndex, totalChunks);
         String fullPrompt = prompt + "\n\n" + chunk;
 
-        LLMResponse response = llmProvider.comprehendChunk(fullPrompt);
+        LLMResponse response = llmProvider.chat(fullPrompt, SmartCacheStrategy.RequestType.COMPREHEND_CHUNK);
         stats.add(response);
         
         DocumentComprehendResult chunkResult = parseComprehendResponse(response.content());
@@ -239,7 +264,7 @@ public class DocumentComprehender {
     
     private String generateFinalSummary(String title, String accumulatedSummary, LLMUsageStats stats) {
         String summaryPrompt = LLMPromptTemplates.generateSummary(title, accumulatedSummary);
-        LLMResponse response = llmProvider.generateSummary(summaryPrompt);
+        LLMResponse response = llmProvider.chat(summaryPrompt, SmartCacheStrategy.RequestType.GENERATE_SUMMARY);
         stats.add(response);
         
         return response.content();
