@@ -6,8 +6,8 @@ spring:
     model:
       chat: openai
     openai:
-      api-key: ${AI_OPENAI_API_KEY}
-      base-url: https://api.hunyuan.cloud.tencent.com/v1
+      api-key: ${AI_OPENAI_API_KEY:your-api-key}
+      base-url: ${AI_OPENAI_BASE_URL:https://api.openai.com}
       chat:
         completions-path: /chat/completions
 
@@ -17,9 +17,9 @@ zerovector:
   use-sharded-storage: true
   shard-size: 100
   model:
-    heavy: hunyuan-turbos-latest
-    light: hunyuan-lite
-    fast: hunyuan-turbos-latest
+    heavy: gpt-4o-mini
+    light: gpt-4o-mini
+    fast: gpt-4o-mini
   concurrency:
     max-concurrent-requests: 1
     requests-per-second: 1
