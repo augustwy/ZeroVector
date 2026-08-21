@@ -44,6 +44,10 @@ ZeroVector/
 ### 启动示例
 
 ```bash
+# 首次运行或修改 core/starter 后必须先安装到本地仓库，
+# 否则 example 会从本地仓库加载旧版 SNAPSHOT jar 导致启动失败
+./mvnw install -DskipTests
+
 cd zerovector-spring-boot-example
 ../mvnw spring-boot:run
 ```

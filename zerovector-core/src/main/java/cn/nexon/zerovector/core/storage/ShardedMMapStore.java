@@ -66,7 +66,8 @@ public class ShardedMMapStore implements AutoCloseable {
     }
 
     private int shardFor(String chunkId) {
-        return Math.abs(chunkId.hashCode()) % shards.length;
+        // floorMod 保证结果非负（abs(Integer.MIN_VALUE) 仍为负，会导致数组越界）
+        return Math.floorMod(chunkId.hashCode(), shards.length);
     }
 
     public MMapDocumentStore.FileLocation addChunk(String chunkId, String content) throws IOException {

@@ -109,16 +109,19 @@ public class ShardedTreeStorage implements AutoCloseable {
             nodeShards.clear();
             chunkShards.clear();
 
-            // 保存根节点
-            if (tree.rootNode() != null) {
-                saveRootNode(tree.rootNode());
-            }
+            // 写入顺序：数据分片 → 根节点 → 元数据（最后）。
+            // metadata 是加载入口，作为提交点：中途崩溃时旧 metadata 仍指向完整旧数据
 
             // 分片保存节点和文档块
             saveNodesInShards(nodes);
             saveChunksInShards(chunks);
 
-            // 保存元数据
+            // 保存根节点
+            if (tree.rootNode() != null) {
+                saveRootNode(tree.rootNode());
+            }
+
+            // 保存元数据（原子替换）
             saveMetadata();
 
             // 清理不再引用的孤立 shard 文件
@@ -152,57 +155,9 @@ public class ShardedTreeStorage implements AutoCloseable {
     }
     
     /**
-     * 增量更新语义树
-     * 只保存新增的节点和文档块，提高效率
-     */
-    public void updateTreeIncremental(SemanticTree oldTree, SemanticTree newTree) throws IOException {
-        if (oldTree == null) {
-            throw new IllegalArgumentException("Old tree cannot be null");
-        }
-        if (newTree == null) {
-            throw new IllegalArgumentException("New tree cannot be null");
-        }
-        
-        TreeNode oldRoot = oldTree.rootNode();
-        TreeNode newRoot = newTree.rootNode();
-        
-        if (oldRoot == null && newRoot == null) {
-            return;
-        }
-        
-        if (oldRoot == null || !oldRoot.equals(newRoot)) {
-            if (newRoot != null) {
-                saveRootNode(newRoot);
-            }
-        }
-        
-        Map<String, TreeNode> newNodes = new HashMap<>();
-        for (Map.Entry<String, TreeNode> entry : newTree.nodes().entrySet()) {
-            if (!oldTree.nodes().containsKey(entry.getKey())) {
-                newNodes.put(entry.getKey(), entry.getValue());
-            }
-        }
-        
-        Map<String, DocumentChunk> newChunks = new HashMap<>();
-        for (Map.Entry<String, DocumentChunk> entry : newTree.chunks().entrySet()) {
-            if (!oldTree.chunks().containsKey(entry.getKey())) {
-                newChunks.put(entry.getValue().id(), entry.getValue());
-            }
-        }
-        
-        if (!newNodes.isEmpty()) {
-            saveNodesInShards(newNodes);
-        }
-        
-        if (!newChunks.isEmpty()) {
-            saveChunksInShards(newChunks);
-        }
-        
-        saveMetadata();
-    }
-    
-    /**
      * 获取节点（支持懒加载）
+     * <p>先检查缓存，未命中则整片加载；即使加载后瞬间被驱逐，
+     * 也直接从刚加载的分片数据兜底返回，不会误报节点不存在
      */
     public TreeNode getNode(String nodeId) throws IOException {
         String shardFile = nodeShards.get(nodeId);
@@ -216,8 +171,9 @@ public class ShardedTreeStorage implements AutoCloseable {
         }
         
         try {
-            loadNodeShard(shardFile);
-            return nodeCache.getIfPresent(nodeId);
+            Map<String, TreeNode> shard = loadNodeShard(shardFile);
+            TreeNode node = nodeCache.getIfPresent(nodeId);
+            return node != null ? node : shard.get(nodeId);
         } catch (IOException e) {
             throw new RuntimeException("Failed to load node: " + nodeId, e);
         }
@@ -225,6 +181,7 @@ public class ShardedTreeStorage implements AutoCloseable {
     
     /**
      * 获取文档块（支持懒加载）
+     * <p>兜底逻辑同 {@link #getNode}
      */
     public DocumentChunk getChunk(String chunkId) throws IOException {
         String shardFile = chunkShards.get(chunkId);
@@ -238,8 +195,9 @@ public class ShardedTreeStorage implements AutoCloseable {
         }
         
         try {
-            loadChunkShard(shardFile);
-            return chunkCache.getIfPresent(chunkId);
+            Map<String, DocumentChunk> shard = loadChunkShard(shardFile);
+            DocumentChunk chunk = chunkCache.getIfPresent(chunkId);
+            return chunk != null ? chunk : shard.get(chunkId);
         } catch (IOException e) {
             throw new RuntimeException("Failed to load chunk: " + chunkId, e);
         }
@@ -355,41 +313,41 @@ public class ShardedTreeStorage implements AutoCloseable {
     }
     
     /**
-     * 加载节点分片
+     * 加载节点分片，返回分片内容（同时写入缓存）
      */
-    private void loadNodeShard(String fileName) throws IOException {
+    private Map<String, TreeNode> loadNodeShard(String fileName) throws IOException {
         Path filePath = Paths.get(storageDir, fileName);
         if (!Files.exists(filePath)) {
-            return;
+            return Map.of();
         }
         
         String json = Files.readString(filePath);
         Map<String, TreeNode> nodes = objectMapper.readValue(json, new TypeReference<Map<String, TreeNode>>() {});
         
-        for (Map.Entry<String, TreeNode> entry : nodes.entrySet()) {
-            nodeCache.put(entry.getKey(), entry.getValue());
-        }
+        nodeCache.putAll(nodes);
+        return nodes;
     }
     
     /**
-     * 加载文档块分片
+     * 加载文档块分片，返回分片内容（同时写入缓存）
      */
-    private void loadChunkShard(String fileName) throws IOException {
+    private Map<String, DocumentChunk> loadChunkShard(String fileName) throws IOException {
         Path filePath = Paths.get(storageDir, fileName);
         if (!Files.exists(filePath)) {
-            return;
+            return Map.of();
         }
         
         String json = Files.readString(filePath);
         Map<String, DocumentChunk> chunks = objectMapper.readValue(json, new TypeReference<Map<String, DocumentChunk>>() {});
         
-        for (Map.Entry<String, DocumentChunk> entry : chunks.entrySet()) {
-            chunkCache.put(entry.getKey(), entry.getValue());
-        }
+        chunkCache.putAll(chunks);
+        return chunks;
     }
     
     /**
      * 保存元数据
+     * <p>元数据是加载入口（commit marker），必须最后写入且原子替换：
+     * 先写临时文件再 move，崩溃时旧 metadata 仍指向一致的数据集
      */
     private void saveMetadata() throws IOException {
         Map<String, Object> metadata = new HashMap<>();
@@ -397,9 +355,11 @@ public class ShardedTreeStorage implements AutoCloseable {
         metadata.put("chunkShards", chunkShards);
         metadata.put("shardSize", shardSize);
         
-        Path filePath = Paths.get(storageDir, METADATA_FILE);
         String json = objectMapper.writeValueAsString(metadata);
-        Files.writeString(filePath, json);
+        Path filePath = Paths.get(storageDir, METADATA_FILE);
+        Path tempPath = Paths.get(storageDir, METADATA_FILE + ".tmp");
+        Files.writeString(tempPath, json);
+        Files.move(tempPath, filePath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
     
     /**

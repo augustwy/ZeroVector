@@ -21,6 +21,7 @@ import cn.nexon.zerovector.core.ai.CacheConfig;
 import cn.nexon.zerovector.core.ai.CachedLLMProvider;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.RateLimitedLLMProvider;
+import cn.nexon.zerovector.core.ai.SimilarityConfig;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.hook.LifecycleHook;
@@ -106,12 +107,14 @@ public class ZeroVectorAutoConfiguration {
             return delegate;
         }
         
-        // 配置SmartCacheStrategy
+        // 相似匹配配置按实例注入 CachedLLMProvider，不再写入全局静态状态
+        SimilarityConfig similarityConfig = SimilarityConfig.DEFAULT;
         if (config.getCache() != null && config.getCache().getSmartCache() != null) {
             ZeroVectorProperties.SmartCacheStrategyConfig smartCacheConfig = config.getCache().getSmartCache();
-            SmartCacheStrategy.setSimilarityThreshold(smartCacheConfig.getSimilarityThreshold());
-            SmartCacheStrategy.setMaxSimilarityLength(smartCacheConfig.getMaxSimilarityLength());
-            SmartCacheStrategy.setEnableSimilarityMatching(smartCacheConfig.isEnableSimilarityMatching());
+            similarityConfig = new SimilarityConfig(
+                smartCacheConfig.getSimilarityThreshold(),
+                smartCacheConfig.getMaxSimilarityLength(),
+                smartCacheConfig.isEnableSimilarityMatching());
             logger.debug("SmartCacheStrategy配置已应用: similarityThreshold={}, maxSimilarityLength={}, enableSimilarityMatching={}", 
                 smartCacheConfig.getSimilarityThreshold(), 
                 smartCacheConfig.getMaxSimilarityLength(), 
@@ -136,7 +139,7 @@ public class ZeroVectorAutoConfiguration {
         cacheConfigs.put(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS,
             toCacheConfig(config.getCache().getExtractKeywords()));
 
-        CachedLLMProvider provider = new CachedLLMProvider(delegate, cacheConfigs);
+        CachedLLMProvider provider = new CachedLLMProvider(delegate, cacheConfigs, similarityConfig);
         // 设置相似性搜索的最大条目数
         provider.setMaxSearchItems(100); // 后续可以从配置文件中读取
         

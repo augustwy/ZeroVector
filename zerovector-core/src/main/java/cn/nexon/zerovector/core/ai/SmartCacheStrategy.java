@@ -20,62 +20,9 @@ import cn.nexon.zerovector.core.util.MD5Util;
 
 public class SmartCacheStrategy {
     
-    private static volatile double SIMILARITY_THRESHOLD = 0.85;
-    private static volatile int MAX_SIMILARITY_LENGTH = 500;
-    private static volatile boolean ENABLE_SIMILARITY_MATCHING = true;
-    
-    /**
-     * 设置相似性阈值
-     * @param threshold 相似性阈值，范围0-1
-     */
-    public static void setSimilarityThreshold(double threshold) {
-        if (threshold >= 0 && threshold <= 1) {
-            SIMILARITY_THRESHOLD = threshold;
-        }
-    }
-    
-    /**
-     * 设置最大相似性匹配长度
-     * @param length 最大长度
-     */
-    public static void setMaxSimilarityLength(int length) {
-        if (length > 0) {
-            MAX_SIMILARITY_LENGTH = length;
-        }
-    }
-    
-    /**
-     * 设置是否启用相似性匹配
-     * @param enabled 是否启用
-     */
-    public static void setEnableSimilarityMatching(boolean enabled) {
-        ENABLE_SIMILARITY_MATCHING = enabled;
-    }
-    
-    /**
-     * 获取相似性阈值
-     * @return 相似性阈值
-     */
-    public static double getSimilarityThreshold() {
-        return SIMILARITY_THRESHOLD;
-    }
-    
-    /**
-     * 获取最大相似性匹配长度
-     * @return 最大长度
-     */
-    public static int getMaxSimilarityLength() {
-        return MAX_SIMILARITY_LENGTH;
-    }
-    
-    /**
-     * 获取是否启用相似性匹配
-     * @return 是否启用
-     */
-    public static boolean isEnableSimilarityMatching() {
-        return ENABLE_SIMILARITY_MATCHING;
-    }
-    
+    // 相似提示词匹配的配置（阈值/长度/开关）已拆分为不可变的 SimilarityConfig，
+    // 由 CachedLLMProvider 按实例携带，不再使用静态可变状态。
+
     public enum RequestType {
         COMPREHEND_CHUNK,
         GENERATE_SUMMARY,
@@ -91,10 +38,6 @@ public class SmartCacheStrategy {
         return type.name().toLowerCase() + ":" + hashPrompt(prompt);
     }
     
-    public static String generateCacheKey(String prefix, String prompt) {
-        return prefix + ":" + hashPrompt(prompt);
-    }
-    
     private static String hashPrompt(String prompt) {
         if (prompt == null) {
             return "null";
@@ -102,27 +45,28 @@ public class SmartCacheStrategy {
         return MD5Util.calculateMD5(prompt);
     }
     
-    public static boolean isSimilarPrompt(String prompt1, String prompt2) {
-        if (!ENABLE_SIMILARITY_MATCHING) {
+    public static boolean isSimilarPrompt(String prompt1, String prompt2, SimilarityConfig config) {
+        if (!config.enableSimilarityMatching()) {
             return false;
         }
-        
+
         if (prompt1 == null || prompt2 == null) {
             return false;
         }
-        
+
         String normalized1 = normalizePrompt(prompt1);
         String normalized2 = normalizePrompt(prompt2);
-        
+
         if (normalized1.equals(normalized2)) {
             return true;
         }
-        
-        if (normalized1.length() > MAX_SIMILARITY_LENGTH || normalized2.length() > MAX_SIMILARITY_LENGTH) {
+
+        if (normalized1.length() > config.maxSimilarityLength()
+                || normalized2.length() > config.maxSimilarityLength()) {
             return false;
         }
-        
-        return calculateSimilarity(normalized1, normalized2) >= SIMILARITY_THRESHOLD;
+
+        return calculateSimilarity(normalized1, normalized2, config) >= config.similarityThreshold();
     }
     
     private static String normalizePrompt(String prompt) {
@@ -131,14 +75,14 @@ public class SmartCacheStrategy {
             .trim();
     }
     
-    private static double calculateSimilarity(String s1, String s2) {
+    private static double calculateSimilarity(String s1, String s2, SimilarityConfig config) {
         if (s1.isEmpty() && s2.isEmpty()) return 1.0;
         if (s1.isEmpty() || s2.isEmpty()) return 0.0;
         
         // 对长文本进行摘要处理，提高计算效率
-        if (s1.length() > MAX_SIMILARITY_LENGTH || s2.length() > MAX_SIMILARITY_LENGTH) {
-            s1 = summarizeText(s1, MAX_SIMILARITY_LENGTH);
-            s2 = summarizeText(s2, MAX_SIMILARITY_LENGTH);
+        if (s1.length() > config.maxSimilarityLength() || s2.length() > config.maxSimilarityLength()) {
+            s1 = summarizeText(s1, config.maxSimilarityLength());
+            s2 = summarizeText(s2, config.maxSimilarityLength());
         }
         
         int maxLength = Math.max(s1.length(), s2.length());

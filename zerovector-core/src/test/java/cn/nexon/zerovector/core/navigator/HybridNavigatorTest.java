@@ -226,4 +226,56 @@ class HybridNavigatorTest {
         assertNotNull(result.path());
         assertFalse(result.path().isEmpty());
     }
+
+    @Test
+    void navigate_expandMultiple_returnsChunksFromAllBranches() {
+        // 查询命中 "programming" 类目（tech_cat），需导航一步
+        when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS)))
+            .thenReturn(LLMResponse.success("programming", 5L));
+
+        // 多分支：展开 tech_cat 下的叶子（tech_leaf）
+        when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION)))
+            .thenReturn(LLMResponse.success(
+                "{\"action\":\"expand_multiple\",\"selectedIndexes\":[0],\"reasoning\":\"多分支\",\"confidence\":0.7}", 10L));
+
+        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        NavigationResult result = navigator.navigate("Programming guide");
+
+        assertNotNull(result);
+        assertFalse(result.documents().isEmpty());
+        assertEquals("Java content here", result.documents().get(0).content());
+    }
+
+    @Test
+    void navigate_fallbackSearch_triggersKeywordFallback() {
+        when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS)))
+            .thenReturn(LLMResponse.success("programming", 5L));
+
+        // LLM 主动降级
+        when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION)))
+            .thenReturn(LLMResponse.success(
+                "{\"action\":\"fallback_search\",\"reasoning\":\"无相关子节点\"}", 10L));
+
+        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        NavigationResult result = navigator.navigate("Programming stuff");
+
+        assertNotNull(result);
+    }
+
+    @Test
+    void navigate_expandMultiple_invalidIndexes_stops() {
+        when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS)))
+            .thenReturn(LLMResponse.success("programming", 5L));
+
+        // 越界下标 → 退化为 stop
+        when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION)))
+            .thenReturn(LLMResponse.success(
+                "{\"action\":\"expand_multiple\",\"selectedIndexes\":[99],\"reasoning\":\"越界\"}", 10L));
+
+        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        NavigationResult result = navigator.navigate("Programming stuff");
+
+        assertNotNull(result);
+        assertTrue(result.documents().isEmpty());
+    }
 }

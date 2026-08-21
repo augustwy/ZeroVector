@@ -86,33 +86,6 @@ class ShardedTreeStorageTest {
     }
 
     @Test
-    void updateTreeIncremental_addsNewData() throws IOException {
-        String dir = tempDir.resolve("incremental").toString();
-        TreeNode root = new TreeNode("root", "Root", "Root", NodeType.ROOT,
-            List.of(), List.of(), List.of(), List.of(), List.of());
-        SemanticTree oldTree = new SemanticTree(root, Map.of("root", root), Map.of());
-
-        TreeNode newChild = new TreeNode("child1", "Child", "Added later", NodeType.LEAF,
-            List.of(), List.of("chunk1"), List.of(), List.of(), List.of());
-        DocumentChunk chunk = DocumentChunk.withContent("chunk1", "new content", "summary", Map.of());
-        SemanticTree newTree = new SemanticTree(root,
-            Map.of("root", root, "child1", newChild),
-            Map.of("chunk1", chunk));
-
-        try (ShardedTreeStorage storage = new ShardedTreeStorage(dir, 10)) {
-            storage.saveTree(oldTree);
-            storage.updateTreeIncremental(oldTree, newTree);
-        }
-
-        try (ShardedTreeStorage storage = new ShardedTreeStorage(dir, 10)) {
-            SemanticTree loaded = storage.loadTree();
-            assertNotNull(loaded);
-            assertNotNull(loaded.getNode("child1"));
-            assertEquals("Child", loaded.getNode("child1").name());
-        }
-    }
-
-    @Test
     void saveTree_withSharding_createsMultipleFiles() throws IOException {
         String dir = tempDir.resolve("multipleshards").toString();
         int shardSize = 2;

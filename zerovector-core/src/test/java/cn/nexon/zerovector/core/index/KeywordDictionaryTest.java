@@ -138,23 +138,6 @@ class KeywordDictionaryTest {
     }
 
     @Test
-    void getTopCandidate_returnsHighestScored() {
-        KeywordDictionary dict = new KeywordDictionary();
-        dict.addEntry("keyword", "node1", 1.0);
-        dict.addEntry("keyword", "node2", 3.0);
-
-        Optional<String> top = dict.getTopCandidate("keyword");
-        assertTrue(top.isPresent());
-        assertEquals("node2", top.get());
-    }
-
-    @Test
-    void getTopCandidate_noMatch_returnsEmpty() {
-        KeywordDictionary dict = new KeywordDictionary();
-        assertTrue(dict.getTopCandidate("nothing").isEmpty());
-    }
-
-    @Test
     void clear_removesAll() {
         KeywordDictionary dict = new KeywordDictionary();
         dict.addKeywordDefinition(KeywordDefinition.of("k", "d", "c", "doc1"));

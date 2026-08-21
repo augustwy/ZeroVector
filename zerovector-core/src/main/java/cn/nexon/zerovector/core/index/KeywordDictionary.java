@@ -122,12 +122,41 @@ public final class KeywordDictionary {
     /**
      * 匹配候选节点
      * 根据查询字符串匹配相关的节点，并返回节点及其得分
-     * 
+     *
+     * <p>精确匹配失败时（典型场景：中文等无空格分词语言，整句无法命中倒排索引），
+     * 退化为「词典关键词被查询串包含」的包含匹配。
+     *
      * @param query 查询字符串
      * @return 节点ID到得分的映射表
      */
     public Map<String, Double> matchCandidates(String query) {
-        return matchCandidatesFromKeywords(List.of(query.split("\\s+")));
+        Map<String, Double> exact = matchCandidatesFromKeywords(List.of(query.split("\\s+")));
+        if (!exact.isEmpty()) {
+            return exact;
+        }
+        return matchByContainment(query);
+    }
+
+    private Map<String, Double> matchByContainment(String query) {
+        if (query == null || query.length() < 2) {
+            return Map.of();
+        }
+        String normalizedQuery = query.toLowerCase();
+        Map<String, Double> candidateScores = new HashMap<>();
+        for (Map.Entry<String, List<String>> entry : invertedIndex.entrySet()) {
+            String keyword = entry.getKey();
+            // 过滤单字，避免常见字（"的""是"）造成大面积误命中
+            if (keyword.length() >= 2 && normalizedQuery.contains(keyword)) {
+                double weight = keywordWeights.getOrDefault(keyword, 1.0);
+                for (String nodeId : entry.getValue()) {
+                    candidateScores.merge(nodeId, weight, Double::sum);
+                }
+            }
+        }
+        if (!candidateScores.isEmpty()) {
+            logger.debug("包含匹配命中 {} 个候选节点", candidateScores.size());
+        }
+        return candidateScores;
     }
 
     /**
@@ -150,24 +179,6 @@ public final class KeywordDictionary {
             });
             
         return candidateScores;
-    }
-
-    /**
-     * 获取最佳候选节点
-     * 根据查询字符串返回得分最高的节点
-     * 
-     * @param query 查询字符串
-     * @return 最佳节点ID的Optional对象，如果没有匹配则为空
-     */
-    public Optional<String> getTopCandidate(String query) {
-        Map<String, Double> candidates = matchCandidates(query);
-        if (candidates.isEmpty()) {
-            return Optional.empty();
-        }
-        
-        return candidates.entrySet().stream()
-            .max(Map.Entry.comparingByValue())
-            .map(Map.Entry::getKey);
     }
 
     /**
@@ -273,9 +284,14 @@ public final class KeywordDictionary {
      * @param keyword 要删除的关键词
      */
     public void removeKeywordDefinition(String keyword) {
-        keywordDefinitions.remove(keyword);
-        invertedIndex.remove(keyword);
-        keywordWeights.remove(keyword);
+        if (keyword == null) {
+            return;
+        }
+        // 与 addEntry 的归一化保持对称，否则混合大小写关键词删除静默失败
+        String normalizedKeyword = keyword.toLowerCase();
+        keywordDefinitions.remove(normalizedKeyword);
+        invertedIndex.remove(normalizedKeyword);
+        keywordWeights.remove(normalizedKeyword);
     }
 
     /**

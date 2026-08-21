@@ -20,18 +20,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.ArrayList;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.Comparator;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class HookRegistry {
     private static final Logger logger = LoggerFactory.getLogger(HookRegistry.class);
     
+    // trigger 在查询热路径上无锁读取，必须使用并发容器 + 写时复制列表
     private final Map<HookType, List<LifecycleHook>> hooksByType;
     
     public HookRegistry() {
-        this.hooksByType = new HashMap<>();
+        this.hooksByType = new ConcurrentHashMap<>();
     }
     
     public synchronized void register(LifecycleHook hook) {
@@ -47,8 +48,9 @@ public class HookRegistry {
         }
         
         for (HookType type : supportedTypes) {
-            hooksByType.computeIfAbsent(type, k -> new ArrayList<>()).add(hook);
-            hooksByType.get(type).sort(Comparator.comparingInt(LifecycleHook::getOrder));
+            List<LifecycleHook> hooks = hooksByType.computeIfAbsent(type, k -> new CopyOnWriteArrayList<>());
+            hooks.add(hook);
+            hooks.sort(Comparator.comparingInt(LifecycleHook::getOrder));
         }
         
         logger.debug("已注册钩子: {}，支持类型: {}", hook.getName(), supportedTypes);

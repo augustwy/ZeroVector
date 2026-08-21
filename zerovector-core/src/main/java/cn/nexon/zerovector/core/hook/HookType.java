@@ -28,7 +28,6 @@ public enum HookType {
     TREE_BUILD_START,
     TREE_BUILD_END,
     TREE_BUILD_ERROR,
-    TREE_NODE_CREATED,
     
     NAVIGATION_START,
     NAVIGATION_END,

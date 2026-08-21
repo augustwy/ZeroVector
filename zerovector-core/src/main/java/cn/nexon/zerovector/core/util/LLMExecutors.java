@@ -18,9 +18,12 @@ package cn.nexon.zerovector.core.util;
 
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,6 +41,14 @@ public final class LLMExecutors {
     }
 
     /**
+     * 按 rps 值全局共享的限流器。
+     * <p>每个管理器/构建器都会创建自己的执行器，若各持有限流器，
+     * 聚合请求速率会成倍放大；共享后全 JVM 对同一 rps 配置共用一个节拍。
+     * <p>Semaphore（并发度）仍按执行器实例隔离，不在此列。
+     */
+    private static final ConcurrentHashMap<Double, RateLimiter> SHARED_RATE_LIMITERS = new ConcurrentHashMap<>();
+
+    /**
      * 根据并发配置创建执行器。
      *
      * @param props 并发配置（maxConcurrentRequests 控制 Semaphore，requestsPerSecond 控制速率）
@@ -48,7 +59,11 @@ public final class LLMExecutors {
         double rps = props.getRequestsPerSecond();
 
         Semaphore semaphore = new Semaphore(maxConcurrent);
-        RateLimiter rateLimiter = new RateLimiter(rps);
+        // rps <= 0 视为不限速（否则除零会产生无限等待间隔）；
+        // RateLimiter 按 rps 全局共享：多个执行器各自建实例时聚合速率会成倍放大
+        RateLimiter rateLimiter = rps > 0
+            ? SHARED_RATE_LIMITERS.computeIfAbsent(rps, RateLimiter::new)
+            : null;
         ExecutorService delegate = Executors.newVirtualThreadPerTaskExecutor();
 
         return new ExecutorService() {
@@ -78,14 +93,36 @@ public final class LLMExecutors {
 
             @Override
             public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) {
-                return tasks.stream().map(this::submit).toList();
+                // ExecutorService 契约要求阻塞等待全部完成，复用带超时版本（无限等待）
+                return invokeAll(tasks, Long.MAX_VALUE, TimeUnit.NANOSECONDS);
             }
 
             @Override
             public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks,
                                                   long timeout, TimeUnit unit) {
-                // 简化实现：忽略 timeout
-                return invokeAll(tasks);
+                long deadline = System.nanoTime() + unit.toNanos(timeout);
+                List<Future<T>> futures = new ArrayList<>(tasks.size());
+                for (Callable<T> task : tasks) {
+                    futures.add(submit(task));
+                }
+                for (Future<T> future : futures) {
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0) {
+                        future.cancel(true);
+                        continue;
+                    }
+                    try {
+                        future.get(remaining, TimeUnit.NANOSECONDS);
+                    } catch (CancellationException | ExecutionException ignored) {
+                        // 契约：任务异常保留在 Future 中，由调用方取出
+                    } catch (TimeoutException e) {
+                        future.cancel(true);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        future.cancel(true);
+                    }
+                }
+                return futures;
             }
 
             @Override
@@ -132,7 +169,9 @@ public final class LLMExecutors {
             private void runWithLimit(Runnable command) {
                 semaphore.acquireUninterruptibly();
                 try {
-                    rateLimiter.acquire();
+                    if (rateLimiter != null) {
+                        rateLimiter.acquire();
+                    }
                     command.run();
                 } finally {
                     semaphore.release();
@@ -142,7 +181,9 @@ public final class LLMExecutors {
             private <T> T runWithLimit(Callable<T> task) throws Exception {
                 semaphore.acquireUninterruptibly();
                 try {
-                    rateLimiter.acquire();
+                    if (rateLimiter != null) {
+                        rateLimiter.acquire();
+                    }
                     return task.call();
                 } finally {
                     semaphore.release();

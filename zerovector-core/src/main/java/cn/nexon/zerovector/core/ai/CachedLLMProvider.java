@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -38,14 +39,21 @@ public class CachedLLMProvider implements LLMProvider {
     private final Map<SmartCacheStrategy.RequestType, CacheStatistics> statistics;
     private final Map<SmartCacheStrategy.RequestType, CacheConfig> configs;
     private final Map<String, String> similarPromptCache;
+    private final SimilarityConfig similarityConfig;
 
     public CachedLLMProvider(LLMProvider delegate) {
         this(delegate, getDefaultConfigs());
     }
 
     public CachedLLMProvider(LLMProvider delegate, Map<SmartCacheStrategy.RequestType, CacheConfig> configs) {
+        this(delegate, configs, SimilarityConfig.DEFAULT);
+    }
+
+    public CachedLLMProvider(LLMProvider delegate, Map<SmartCacheStrategy.RequestType, CacheConfig> configs,
+                             SimilarityConfig similarityConfig) {
         this.delegate = delegate;
         this.configs = new ConcurrentHashMap<>(configs);
+        this.similarityConfig = similarityConfig != null ? similarityConfig : SimilarityConfig.DEFAULT;
         this.caches = new ConcurrentHashMap<>();
         this.statistics = new ConcurrentHashMap<>();
         this.similarPromptCache = Caffeine.newBuilder()
@@ -137,6 +145,18 @@ public class CachedLLMProvider implements LLMProvider {
 
     private volatile int maxSearchItems = 100;
 
+    /**
+     * 允许相似提示词模糊命中的请求类型。
+     * 仅限确定性提取类任务；文档理解/聚类/摘要/导航决策对输入高度敏感，
+     * 模糊命中会静默返回错误结果，故排除。
+     */
+    private static final Set<SmartCacheStrategy.RequestType> SIMILARITY_ENABLED_TYPES = Set.of(
+        SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS,
+        SmartCacheStrategy.RequestType.EXTRACT_ENTITIES,
+        SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS,
+        SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS
+    );
+
     public void setMaxSearchItems(int maxSearchItems) {
         if (maxSearchItems > 0) {
             this.maxSearchItems = maxSearchItems;
@@ -149,14 +169,14 @@ public class CachedLLMProvider implements LLMProvider {
 
     private LLMResponse findSimilarCachedResult(SmartCacheStrategy.RequestType type, String prompt, String cacheKey) {
         Cache<String, LLMResponse> cache = caches.get(type);
-        if (cache == null) return null;
+        if (cache == null || !SIMILARITY_ENABLED_TYPES.contains(type)) return null;
 
         int count = 0;
         for (Map.Entry<String, LLMResponse> entry : cache.asMap().entrySet()) {
             if (count >= maxSearchItems) break;
 
             String cachedPrompt = similarPromptCache.get(entry.getKey());
-            if (cachedPrompt != null && SmartCacheStrategy.isSimilarPrompt(prompt, cachedPrompt)) {
+            if (cachedPrompt != null && SmartCacheStrategy.isSimilarPrompt(prompt, cachedPrompt, similarityConfig)) {
                 return entry.getValue();
             }
             count++;

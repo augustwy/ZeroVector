@@ -36,6 +36,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 本地文件文档分片存储
@@ -63,7 +64,8 @@ public class LocalFileChunkStorage implements ChunkStorage {
     private ChunkStorageConfig config;
     private boolean initialized = false;
 
-    private final Map<String, DocumentChunk> chunkCache = new HashMap<>();
+    // 导航路径会经 parallelStream 并发读写此缓存，必须使用并发容器
+    private final Map<String, DocumentChunk> chunkCache = new ConcurrentHashMap<>();
 
     @Override
     public void initialize(ChunkStorageConfig config) throws StorageException {
@@ -197,6 +199,11 @@ public class LocalFileChunkStorage implements ChunkStorage {
         }
 
         chunkCache.remove(chunkId);
+        // 级联删除 mmap 数据，否则缓存失效后"已删除"的 chunk 会复活
+        // 注：shardedStorage 的分片文件包含多个 chunk，无法按条删除，其元数据仍会保留
+        if (mmapStore != null) {
+            mmapStore.deleteChunk(chunkId);
+        }
         logger.debug("删除文档分片: {}", chunkId);
     }
 
@@ -276,24 +283,6 @@ public class LocalFileChunkStorage implements ChunkStorage {
         chunkCache.clear();
         initialized = false;
         logger.debug("LocalFileChunkStorage 已关闭");
-    }
-
-    /**
-     * 获取 mmap 存储（供内部使用）
-     * 
-     * @return mmap 存储实例
-     */
-    public ShardedMMapStore getMMapStore() {
-        return mmapStore;
-    }
-
-    /**
-     * 获取分片存储（供内部使用）
-     * 
-     * @return 分片存储实例
-     */
-    public ShardedTreeStorage getShardedStorage() {
-        return shardedStorage;
     }
 
     /**

@@ -31,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,6 +41,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * 基于 MMap 的文档存储
  * 使用内存映射文件实现高效的文档块存储
+ *
+ * <p><b>容量限制</b>：索引 offset 在读取路径会转为 int，单个数据文件超过 2GB 时行为未定义，
+ * 请通过 {@link ShardedMMapStore} 分片或定期 {@link #compact()} 控制文件大小。
  */
 public class MMapDocumentStore implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(MMapDocumentStore.class);
@@ -328,15 +332,12 @@ public class MMapDocumentStore implements AutoCloseable {
             MappedByteBuffer oldBuffer = buffer();
             oldBuffer.force();
             
-            long oldSize = file.length();
             int oldPosition = oldBuffer.position();
             
+            // 数据已由 mmap 落盘，扩容只需延长文件并重新映射，无需整块拷贝
             file.setLength(newSize);
             MappedByteBuffer newBuffer = file.getChannel().map(
                 FileChannel.MapMode.READ_WRITE, 0, newSize);
-            
-            oldBuffer.rewind();
-            newBuffer.put(oldBuffer);
             
             newBuffer.position(oldPosition);
 
@@ -397,7 +398,11 @@ public class MMapDocumentStore implements AutoCloseable {
                   .append("\n");
             }
             
-            Files.writeString(Paths.get(indexFilePath), sb.toString());
+            // 先写临时文件再原子替换，避免崩溃留下半截索引（数据文件完好但全部不可达）
+            Path indexPath = Paths.get(indexFilePath);
+            Path tempPath = Paths.get(indexFilePath + ".tmp");
+            Files.writeString(tempPath, sb.toString());
+            Files.move(tempPath, indexPath, StandardCopyOption.REPLACE_EXISTING);
             logger.debug("已保存 {} 个文档块索引", index.size());
         } catch (IOException e) {
             throw new StorageException(indexFilePath, "saveIndex", StorageException.ERROR_CODE_IO_ERROR, "Failed to save index file", e);
@@ -406,6 +411,8 @@ public class MMapDocumentStore implements AutoCloseable {
     
     @Override
     public void close() throws IOException {
+        // 与 getChunk/addChunk 的读写锁互斥：防止并发读取时 unmap buffer 导致 JVM 崩溃
+        lock.writeLock().lock();
         try {
             saveIndex();
             MappedByteBuffer buffer = buffer();
@@ -421,6 +428,8 @@ public class MMapDocumentStore implements AutoCloseable {
             setBuffer(null);
         } catch (IOException e) {
             throw new StorageException(dataFilePath, "close", StorageException.ERROR_CODE_IO_ERROR, "Failed to close document store", e);
+        } finally {
+            lock.writeLock().unlock();
         }
     }
     

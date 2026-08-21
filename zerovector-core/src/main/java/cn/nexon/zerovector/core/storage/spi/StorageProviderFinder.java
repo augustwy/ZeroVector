@@ -46,7 +46,7 @@ public final class StorageProviderFinder {
 
     private static final Logger logger = LoggerFactory.getLogger(StorageProviderFinder.class);
 
-    private static final Map<Class<?>, Map<String, ProviderInfo<?>>> PROVIDERS = new ConcurrentHashMap<>();
+    private static final Map<Class<?>, Map<String, ProviderInfo>> PROVIDERS = new ConcurrentHashMap<>();
 
     private StorageProviderFinder() {
     }
@@ -54,27 +54,29 @@ public final class StorageProviderFinder {
     /**
      * 发现指定类型的存储实现
      * 
+     * <p>每次调用都会通过无参构造器创建<b>新实例</b>——存储实现是有状态的
+     * （持有配置、打开的文件等），共享实例会导致多次 initialize 被拒或数据串库。
+     *
      * @param providerType 存储接口类型
      * @param type 存储类型标识
      * @param <T> 存储接口类型
-     * @return 存储实现实例，如果未找到则返回 empty
+     * @return 新创建的存储实现实例，如果未找到则返回 empty
      */
     public static <T> Optional<T> findProvider(Class<T> providerType, String type) {
         if (providerType == null || type == null || type.isEmpty()) {
             return Optional.empty();
         }
 
-        Map<String, ProviderInfo<?>> providers = PROVIDERS.computeIfAbsent(providerType,
+        Map<String, ProviderInfo> providers = PROVIDERS.computeIfAbsent(providerType,
             StorageProviderFinder::loadProviders);
 
-        ProviderInfo<?> info = providers.get(type);
+        ProviderInfo info = providers.get(type);
         if (info != null) {
             try {
-                @SuppressWarnings("unchecked")
-                T provider = (T) info.provider;
-                return Optional.of(provider);
-            } catch (ClassCastException e) {
-                logger.warn("无法转换存储提供者类型: {}", type, e);
+                Object instance = info.providerClass().getDeclaredConstructor().newInstance();
+                return Optional.of(providerType.cast(instance));
+            } catch (ReflectiveOperationException e) {
+                logger.warn("无法实例化存储提供者: {}", type, e);
             }
         }
 
@@ -93,7 +95,7 @@ public final class StorageProviderFinder {
             return Collections.emptySet();
         }
 
-        Map<String, ProviderInfo<?>> providers = PROVIDERS.computeIfAbsent(providerType,
+        Map<String, ProviderInfo> providers = PROVIDERS.computeIfAbsent(providerType,
             StorageProviderFinder::loadProviders);
 
         return Collections.unmodifiableSet(providers.keySet());
@@ -112,10 +114,10 @@ public final class StorageProviderFinder {
             return Optional.empty();
         }
 
-        Map<String, ProviderInfo<?>> providers = PROVIDERS.computeIfAbsent(providerType,
+        Map<String, ProviderInfo> providers = PROVIDERS.computeIfAbsent(providerType,
             StorageProviderFinder::loadProviders);
 
-        ProviderInfo<?> info = providers.get(type);
+        ProviderInfo info = providers.get(type);
         return info != null ? Optional.of(info.description) : Optional.empty();
     }
 
@@ -142,29 +144,30 @@ public final class StorageProviderFinder {
         }
     }
 
-    private static <T> Map<String, ProviderInfo<?>> loadProviders(Class<T> providerType) {
-        Map<String, ProviderInfo<?>> result = new HashMap<>();
+    private static <T> Map<String, ProviderInfo> loadProviders(Class<T> providerType) {
+        Map<String, ProviderInfo> result = new HashMap<>();
 
         try {
+            // stream() + Provider::type 只加载类信息，不提前实例化
             ServiceLoader<T> loader = ServiceLoader.load(providerType);
 
-            for (T provider : loader) {
-                StorageProvider annotation = provider.getClass()
-                    .getAnnotation(StorageProvider.class);
+            for (ServiceLoader.Provider<T> provider : loader.stream().toList()) {
+                Class<? extends T> providerClass = provider.type();
+                StorageProvider annotation = providerClass.getAnnotation(StorageProvider.class);
 
                 if (annotation != null) {
                     String type = annotation.type();
-                    ProviderInfo<T> info = new ProviderInfo<>(
-                        provider,
+                    ProviderInfo info = new ProviderInfo(
+                        providerClass,
                         annotation.priority(),
                         annotation.description()
                     );
 
-                    ProviderInfo<?> existing = result.get(type);
-                    if (existing == null || info.priority < existing.priority) {
+                    ProviderInfo existing = result.get(type);
+                    if (existing == null || info.priority() < existing.priority()) {
                         result.put(type, info);
-                        logger.debug("加载存储提供者: {} -> {} (优先级: {})",
-                            type, provider.getClass().getName(), info.priority);
+                        logger.debug("发现存储提供者: {} -> {} (优先级: {})",
+                            type, providerClass.getName(), info.priority());
                     }
                 }
             }
@@ -176,5 +179,5 @@ public final class StorageProviderFinder {
         return result;
     }
 
-    private record ProviderInfo<T>(T provider, int priority, String description) {}
+    private record ProviderInfo(Class<?> providerClass, int priority, String description) {}
 }

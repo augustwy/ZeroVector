@@ -199,8 +199,6 @@ public class HybridNavigator {
                         stats
                     );
                 }
-                default -> {
-                }
             }
             
             hookExecutor.executeHooks(HookType.NAVIGATION_STEP,
@@ -249,34 +247,6 @@ public class HybridNavigator {
             node.name(),
             node.description(),
             childNodeDescriptions
-        );
-    }
-    
-    private NavigationResult handleMultiPath(String query, List<String> nodeIds, List<NavigationPath> navigationHistory, LLMUsageStats stats) {
-        List<DocumentChunk> allChunks = new ArrayList<>();
-        List<String> allNodeIds = new ArrayList<>();
-        
-        for (String nodeId : nodeIds) {
-            TreeNode node = tree.getNode(nodeId);
-            if (node != null) {
-                allNodeIds.add(nodeId);
-                if (node.isLeaf() && node.hasChunks()) {
-                    allChunks.addAll(loadChunks(node.chunkIds()));
-                }
-            }
-        }
-        
-        navigationHistory.add(new NavigationPath(
-            query,
-            allNodeIds,
-            "Multi-path expansion"
-        ));
-        
-        return new NavigationResult(
-            allChunks,
-            "Multi-path expansion across " + nodeIds.size() + " nodes",
-            navigationHistory,
-            stats
         );
     }
     
@@ -332,8 +302,50 @@ public class HybridNavigator {
         );
     }
     
+    /**
+     * 多分支并行处理：收集每个选中子节点子树下的全部叶子文档块。
+     * <p>纯树遍历、不追加 LLM 调用，适合查询有歧义或横跨多个类目时提高召回。
+     */
+    private NavigationResult handleMultiPath(String query, List<String> nodeIds,
+                                             List<NavigationPath> navigationHistory, LLMUsageStats stats) {
+        List<DocumentChunk> allChunks = new ArrayList<>();
+        for (String nodeId : nodeIds) {
+            TreeNode node = tree.getNode(nodeId);
+            if (node != null) {
+                collectLeafChunks(node, allChunks);
+            }
+        }
+        
+        navigationHistory.add(new NavigationPath(
+            query,
+            new ArrayList<>(nodeIds),
+            "Multi-path expansion"
+        ));
+        
+        return new NavigationResult(
+            allChunks,
+            "Multi-path expansion across " + nodeIds.size() + " nodes",
+            navigationHistory,
+            stats
+        );
+    }
+    
+    private void collectLeafChunks(TreeNode node, List<DocumentChunk> out) {
+        if (node.isLeaf()) {
+            out.addAll(loadChunks(node.chunkIds()));
+            return;
+        }
+        for (String childId : node.childrenIds()) {
+            TreeNode child = tree.getNode(childId);
+            if (child != null) {
+                collectLeafChunks(child, out);
+            }
+        }
+    }
+    
     private List<DocumentChunk> loadChunks(List<String> chunkIds) {
-        return chunkIds.parallelStream()
+        // 叶子节点通常只挂 1 个 chunk，并行流开销大于收益
+        return chunkIds.stream()
             .map(this::resolveChunk)
             .filter(java.util.Objects::nonNull)
             .collect(Collectors.toList());
@@ -370,17 +382,39 @@ public class HybridNavigator {
     private NavigationAction parseNavigationResponse(String response, List<TreeNode> childNodes) {
         try {
             NavigationDecisionResult result = OBJECT_MAPPER.readValue(response, NavigationDecisionResult.class);
+            String action = result.action() == null ? "" : result.action().trim();
             
-            if (result.selectedIndex() >= 0 && result.selectedIndex() < childNodes.size()) {
-                TreeNode selectedNode = childNodes.get(result.selectedIndex());
-                return new NavigationAction.SelectChild(
-                        selectedNode.id(),
-                        result.reasoning(),
-                        result.confidence()
-                );
-            } else {
-                return new NavigationAction.Stop(result.reasoning());
-            }
+            return switch (action) {
+                case "expand_multiple" -> {
+                    List<String> ids = new ArrayList<>();
+                    if (result.selectedIndexes() != null) {
+                        for (Integer idx : result.selectedIndexes()) {
+                            if (idx != null && idx >= 0 && idx < childNodes.size()) {
+                                ids.add(childNodes.get(idx).id());
+                            }
+                        }
+                    }
+                    // 多分支无有效目标时退化为停止，避免空结果
+                    yield ids.isEmpty()
+                        ? new NavigationAction.Stop(result.reasoning())
+                        : new NavigationAction.ExpandMultiple(ids, result.reasoning());
+                }
+                case "fallback_search" -> new NavigationAction.FallbackSearch(result.reasoning());
+                case "stop" -> new NavigationAction.Stop(result.reasoning());
+                // 兼容旧协议：无 action 字段时按 selectedIndex 处理
+                default -> {
+                    Integer idx = result.selectedIndex();
+                    if (idx != null && idx >= 0 && idx < childNodes.size()) {
+                        TreeNode selectedNode = childNodes.get(idx);
+                        yield new NavigationAction.SelectChild(
+                                selectedNode.id(),
+                                result.reasoning(),
+                                result.confidence()
+                        );
+                    }
+                    yield new NavigationAction.Stop(result.reasoning());
+                }
+            };
         } catch (Exception e) {
             throw new PromptLoadException("decideNavigation", PromptLoadException.ERROR_CODE_PARSE_FAILED, 
                 "Failed to parse navigation decision response", e);

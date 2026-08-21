@@ -44,7 +44,6 @@ import cn.nexon.zerovector.core.storage.local.LocalFileDocumentCopyStorage;
 import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
 import cn.nexon.zerovector.core.storage.spi.DictionaryStorage;
 import cn.nexon.zerovector.core.storage.spi.DocumentCopyStorage;
-import cn.nexon.zerovector.core.tree.Navigator;
 import cn.nexon.zerovector.core.tree.TreeBuilder;
 import cn.nexon.zerovector.core.util.FileUtils;
 import cn.nexon.zerovector.core.util.LLMExecutors;
@@ -62,6 +61,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 
@@ -94,7 +94,6 @@ public class SemanticTreeManager {
     private ChunkStorage chunkStore;
     private ShardedTreeStorage shardedTreeStorage;
     private SemanticTree semanticTree;
-    private Navigator navigator;
     private HybridNavigator hybridNavigator;
 
     /**
@@ -238,7 +237,6 @@ public class SemanticTreeManager {
             }
 
             if (this.semanticTree != null) {
-                this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
                 this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(),
                     llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
                 logger.debug("已加载已保存的语义树");
@@ -262,10 +260,11 @@ public class SemanticTreeManager {
 
     /**
      * 构建语义树
+     * <p>synchronized：树构建与保存非原子，需防止并发写入互相覆盖
      *
      * @param documents 文档列表
      */
-    public void buildTree(List<Document> documents) {
+    public synchronized void buildTree(List<Document> documents) {
         long startTime = System.currentTimeMillis();
         LLMUsageStats totalStats = new LLMUsageStats();
 
@@ -285,7 +284,6 @@ public class SemanticTreeManager {
             this.semanticTree = buildResult.tree();
             totalStats.merge(buildResult.llmUsageStats());
 
-            this.navigator = new Navigator(semanticTree, llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
             this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStore, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
 
             long duration = System.currentTimeMillis() - startTime;
@@ -364,11 +362,12 @@ public class SemanticTreeManager {
 
     /**
      * 添加单个文档
+     * <p>synchronized：更新树与保存非原子，需防止并发上传互相覆盖
      *
      * @param filePath 文件路径
      * @return 文档上传结果，包含 LLM 调用统计
      */
-    public DocumentUploadResult addDocument(Path filePath) {
+    public synchronized DocumentUploadResult addDocument(Path filePath) {
         long startTime = System.currentTimeMillis();
         LLMUsageStats totalStats = new LLMUsageStats();
 
@@ -456,7 +455,8 @@ public class SemanticTreeManager {
 
     private Document createDocumentFromFile(Path originalPath, Path copiedPath, String md5) {
         String fileName = FileUtils.getFileName(originalPath);
-        String docId = "doc_" + System.currentTimeMillis();
+        // UUID 而非时间戳：批量/缓存命中时处理可亚毫秒完成，同毫秒 ID 会冲突导致文档相互覆盖
+        String docId = "doc_" + UUID.randomUUID();
 
         return Document.fromFile(docId, fileName, copiedPath.toString(), md5,
             Map.of("original_file", originalPath.toString()));
@@ -524,7 +524,6 @@ public class SemanticTreeManager {
     }
 
     private void updateNavigators() {
-        this.navigator = new Navigator(semanticTree, llmProvider, chunkStorage, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
         this.hybridNavigator = new HybridNavigator(semanticTree, getKeywordDictionary(), llmProvider, chunkStorage, concurrencyProperties.getMaxNavigationSteps(), hookExecutor);
     }
 
@@ -549,15 +548,12 @@ public class SemanticTreeManager {
                     "Semantic tree not built yet");
             }
 
-            NavigationResult result;
-            if (hybridNavigator != null) {
-                result = hybridNavigator.navigate(query);
-            } else if (navigator != null) {
-                result = navigator.navigate(query);
-            } else {
+            if (hybridNavigator == null) {
+                // semanticTree 非空时导航器必然已创建，此分支仅为防御性保护
                 throw new NavigationException(query, null, NavigationException.ERROR_CODE_NO_NAVIGATOR,
                     "No navigator available");
             }
+            NavigationResult result = hybridNavigator.navigate(query);
 
             stats.merge(result.llmUsageStats());
 
@@ -631,12 +627,6 @@ public class SemanticTreeManager {
 
         dictionaryStorage.persist();
         logger.debug("已保存关键词字典");
-    }
-
-    public void resetNavigator() {
-        if (navigator != null) {
-            navigator.reset();
-        }
     }
 
     public void close() throws Exception {

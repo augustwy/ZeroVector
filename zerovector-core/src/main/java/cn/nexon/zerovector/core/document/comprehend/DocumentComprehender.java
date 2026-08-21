@@ -354,11 +354,7 @@ public class DocumentComprehender {
         if (buffer == null) {
             return;
         }
-        try {
-            buffer.force();
-        } catch (Exception e) {
-            logger.warn("强制写入 mmap buffer 失败", e);
-        }
+        // 只读映射调用 force() 会抛 ReadOnlyBufferException，此处仅需解除映射
         MmapUtils.clean(buffer);
     }
 

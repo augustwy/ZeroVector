@@ -16,19 +16,11 @@
 
 package cn.nexon.zerovector.core.ai;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SmartCacheStrategyTest {
-
-    @AfterEach
-    void resetThresholds() {
-        SmartCacheStrategy.setSimilarityThreshold(0.85);
-        SmartCacheStrategy.setMaxSimilarityLength(500);
-        SmartCacheStrategy.setEnableSimilarityMatching(true);
-    }
 
     @Test
     void generateCacheKey_differsByType() {
@@ -60,15 +52,9 @@ class SmartCacheStrategyTest {
     }
 
     @Test
-    void generateCacheKey_withCustomPrefix() {
-        String key = SmartCacheStrategy.generateCacheKey("custom_prefix", "hello");
-        assertTrue(key.startsWith("custom_prefix:"));
-    }
-
-    @Test
     void isSimilarPrompt_exactMatch_returnsTrue() {
         assertTrue(SmartCacheStrategy.isSimilarPrompt(
-            "What is ZeroVector", "What is ZeroVector"));
+            "What is ZeroVector", "What is ZeroVector", SimilarityConfig.DEFAULT));
     }
 
     @Test
@@ -76,72 +62,65 @@ class SmartCacheStrategyTest {
         // "hello xorld" vs "hello world": 1 char diff, maxLen=11, sim=0.909 > 0.85
         assertTrue(SmartCacheStrategy.isSimilarPrompt(
             "hello world",
-            "hello xorld"));
+            "hello xorld", SimilarityConfig.DEFAULT));
     }
 
     @Test
     void isSimilarPrompt_differentContent_returnsFalse() {
         assertFalse(SmartCacheStrategy.isSimilarPrompt(
             "How to deploy the system",
-            "What is the weather today"));
-    }
-
-    @Test
-    void isSimilarPrompt_singleCharDiff_returnsTrue() {
-        // "hello world" vs "hello xorld" — 1 char diffs at length 11 = 0.91 > 0.85
-        assertTrue(SmartCacheStrategy.isSimilarPrompt(
-            "hello world", "hello xorld"));
+            "What is the weather today", SimilarityConfig.DEFAULT));
     }
 
     @Test
     void isSimilarPrompt_manyDifferences_returnsFalse() {
         assertFalse(SmartCacheStrategy.isSimilarPrompt(
-            "aaaaa", "bbbbb"));
+            "aaaaa", "bbbbb", SimilarityConfig.DEFAULT));
     }
 
     @Test
     void isSimilarPrompt_nullInput_returnsFalse() {
-        assertFalse(SmartCacheStrategy.isSimilarPrompt(null, "hello"));
-        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello", null));
-        assertFalse(SmartCacheStrategy.isSimilarPrompt(null, null));
+        assertFalse(SmartCacheStrategy.isSimilarPrompt(null, "hello", SimilarityConfig.DEFAULT));
+        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello", null, SimilarityConfig.DEFAULT));
+        assertFalse(SmartCacheStrategy.isSimilarPrompt(null, null, SimilarityConfig.DEFAULT));
     }
 
     @Test
     void isSimilarPrompt_disabledMatching_returnsFalse() {
-        SmartCacheStrategy.setEnableSimilarityMatching(false);
-        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello", "hello"));
+        SimilarityConfig disabled = new SimilarityConfig(0.85, 500, false);
+        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello", "hello", disabled));
     }
 
     @Test
     void isSimilarPrompt_exceedsMaxLength_returnsFalse() {
-        SmartCacheStrategy.setMaxSimilarityLength(10);
+        SimilarityConfig shortLimit = new SimilarityConfig(0.85, 10, true);
         assertFalse(SmartCacheStrategy.isSimilarPrompt(
-            "this is a very long prompt", "this is also long but not same"));
+            "this is a very long prompt", "this is also long but not same", shortLimit));
     }
 
     @Test
     void isSimilarPrompt_caseInsensitive_returnsTrue() {
         assertTrue(SmartCacheStrategy.isSimilarPrompt(
             "ZeroVector Knowledge Base",
-            "zerovector knowledge base"));
+            "zerovector knowledge base", SimilarityConfig.DEFAULT));
     }
 
     @Test
     void isSimilarPrompt_extraWhitespaceNormalized_returnsTrue() {
         assertTrue(SmartCacheStrategy.isSimilarPrompt(
             "hello   world  foo",
-            "hello world foo"));
+            "hello world foo", SimilarityConfig.DEFAULT));
     }
 
     @Test
     void isSimilarPrompt_emptyStrings_returnsTrue() {
-        assertTrue(SmartCacheStrategy.isSimilarPrompt("", ""));
+        assertTrue(SmartCacheStrategy.isSimilarPrompt("", "", SimilarityConfig.DEFAULT));
     }
 
     @Test
     void isSimilarPrompt_oneEmptyString_returnsFalse() {
-        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello", ""));
-        assertFalse(SmartCacheStrategy.isSimilarPrompt("", "world"));
+        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello", "", SimilarityConfig.DEFAULT));
+        assertFalse(SmartCacheStrategy.isSimilarPrompt("", "world", SimilarityConfig.DEFAULT));
     }
 
     @Test
@@ -171,32 +150,27 @@ class SmartCacheStrategyTest {
     }
 
     @Test
-    void similarityThreshold_clampsToValidRange() {
-        SmartCacheStrategy.setSimilarityThreshold(1.5);
-        assertEquals(0.85, SmartCacheStrategy.getSimilarityThreshold(), 0.001);
-        SmartCacheStrategy.setSimilarityThreshold(-0.5);
-        assertEquals(0.85, SmartCacheStrategy.getSimilarityThreshold(), 0.001);
-        SmartCacheStrategy.setSimilarityThreshold(0.75);
-        assertEquals(0.75, SmartCacheStrategy.getSimilarityThreshold(), 0.001);
+    void similarityConfig_clampsThresholdToValidRange() {
+        assertEquals(0.85, new SimilarityConfig(1.5, 500, true).similarityThreshold(), 0.001);
+        assertEquals(0.85, new SimilarityConfig(-0.5, 500, true).similarityThreshold(), 0.001);
+        assertEquals(0.75, new SimilarityConfig(0.75, 500, true).similarityThreshold(), 0.001);
+        assertEquals(0.85, new SimilarityConfig(Double.NaN, 500, true).similarityThreshold(), 0.001);
     }
 
     @Test
-    void maxSimilarityLength_onlyAcceptsPositive() {
-        SmartCacheStrategy.setMaxSimilarityLength(-5);
-        assertEquals(500, SmartCacheStrategy.getMaxSimilarityLength());
-        SmartCacheStrategy.setMaxSimilarityLength(0);
-        assertEquals(500, SmartCacheStrategy.getMaxSimilarityLength());
-        SmartCacheStrategy.setMaxSimilarityLength(200);
-        assertEquals(200, SmartCacheStrategy.getMaxSimilarityLength());
+    void similarityConfig_onlyAcceptsPositiveLength() {
+        assertEquals(500, new SimilarityConfig(0.85, -5, true).maxSimilarityLength());
+        assertEquals(500, new SimilarityConfig(0.85, 0, true).maxSimilarityLength());
+        assertEquals(200, new SimilarityConfig(0.85, 200, true).maxSimilarityLength());
     }
 
     @Test
     void isSimilarPrompt_adjustedThreshold_affectsResult() {
-        SmartCacheStrategy.setSimilarityThreshold(0.99);
-        // "hello" vs "helo" — less similar but with high threshold should fail
-        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello world", "hello wrld"));
-        SmartCacheStrategy.setSimilarityThreshold(0.5);
-        // Now the same pair should pass
-        assertTrue(SmartCacheStrategy.isSimilarPrompt("hello world", "hello wrld"));
+        // "hello world" vs "hello wrld" — 2 char diffs at length 11 ≈ 0.82
+        SimilarityConfig strict = new SimilarityConfig(0.99, 500, true);
+        assertFalse(SmartCacheStrategy.isSimilarPrompt("hello world", "hello wrld", strict));
+
+        SimilarityConfig loose = new SimilarityConfig(0.5, 500, true);
+        assertTrue(SmartCacheStrategy.isSimilarPrompt("hello world", "hello wrld", loose));
     }
 }
