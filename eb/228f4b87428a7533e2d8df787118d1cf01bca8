@@ -1,0 +1,20 @@
+zerovector-core/src/main/java/cn/nexon/zerovector/core/KnowledgeBaseManager.java
+  h_9bed5bb34a64c1 68,70,75,91,145,153
+zerovector-core/src/main/java/cn/nexon/zerovector/core/SemanticTreeManager.java
+  h_9bed5bb34a64c1 157,160,164,166,172,175,180,184,190,213-215,933
+zerovector-core/src/test/java/cn/nexon/zerovector/core/KnowledgeBaseManagerTest.java
+  h_9bed5bb34a64c1 44,52,66
+zerovector-core/src/test/java/cn/nexon/zerovector/core/SemanticTreeManagerTest.java
+  h_9bed5bb34a64c1 124,276,282
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.35",
+  "base_commit_sha": "eb228f4b87428a7533e2d8df787118d1cf01bca8",
+  "prompts": {},
+  "humans": {
+    "h_9bed5bb34a64c1": {
+      "author": "葛未央 <geweiyang@sdpjw.com>"
+    }
+  }
+}
