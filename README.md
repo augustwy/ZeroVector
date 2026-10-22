@@ -189,7 +189,7 @@ LLMProvider llm = new YourLLMProvider();
 DocumentComprehender comprehender = new DocumentComprehender(llm, 4000);
 SemanticTreeManager manager = new SemanticTreeManager(
     llm, comprehender, Paths.get("./data/knowledge_bases/default"),
-    true, 100, new ConcurrencyProperties(), new DefaultHookExecutor());
+    100, new ConcurrencyProperties(), new DefaultHookExecutor());
 // 构造时已完成存储初始化与已有树加载，无需 initialize()
 
 // 默认 COPY + AUTO：小文档整篇，超过 100k 字符才按章节切片
