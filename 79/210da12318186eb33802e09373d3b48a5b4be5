@@ -1,0 +1,18 @@
+README.md
+  h_9bed5bb34a64c1 192
+docs/代码审查报告.md
+  h_9bed5bb34a64c1 137
+docs/技术方案与实现指南.md
+  h_9bed5bb34a64c1 883
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.35",
+  "base_commit_sha": "79210da12318186eb33802e09373d3b48a5b4be5",
+  "prompts": {},
+  "humans": {
+    "h_9bed5bb34a64c1": {
+      "author": "葛未央 <geweiyang@sdpjw.com>"
+    }
+  }
+}
