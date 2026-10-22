@@ -206,7 +206,7 @@ public class CacheController {
 
             TimeUnit timeUnit = TimeUnit.valueOf(timeUnitStr.toUpperCase());
 
-            CacheConfig config = new CacheConfig(maxSize, expireAfterAccess, timeUnit, true, "");
+            CacheConfig config = new CacheConfig(maxSize, expireAfterAccess, timeUnit, true);
             semanticHub.updateCacheConfig(requestType, config);
 
             response.put("success", true);

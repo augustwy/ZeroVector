@@ -23,7 +23,6 @@ import cn.nexon.zerovector.core.exception.PromptLoadException;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.*;
-import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -42,8 +41,6 @@ import static org.mockito.Mockito.*;
 class HybridNavigatorTest {
 
     @Mock LLMProvider llm;
-    @Mock ChunkStorage chunkStore;
-
     private SemanticTree tree;
     private KeywordDictionary dictionary;
     private HybridNavigator navigator;
@@ -76,8 +73,8 @@ class HybridNavigatorTest {
             TECH_LEAF_ID, techLeaf,
             LEGAL_LEAF_ID, legalLeaf
         ), Map.of(
-            CHUNK1_ID, DocumentChunk.withContent(CHUNK1_ID, "Java content here", "Java summary", Map.of()),
-            CHUNK2_ID, DocumentChunk.withContent(CHUNK2_ID, "Legal content here", "Legal summary", Map.of())
+            CHUNK1_ID, DocumentChunk.metadataOnly(CHUNK1_ID, "Java summary", null, Map.of()),
+            CHUNK2_ID, DocumentChunk.metadataOnly(CHUNK2_ID, "Legal summary", null, Map.of())
         ));
 
         dictionary = new KeywordDictionary();
@@ -87,17 +84,20 @@ class HybridNavigatorTest {
     }
 
     @Test
-    void navigate_keywordDirectMatch_returnsLeafContent() {
-        // "java" matches tech_leaf directly (a LEAF node) — no navigation step needed
+    void navigate_keywordDirectMatch_returnsMetadataOnly() {
+        // "java" matches tech_leaf directly — navigation must not read full content
         when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS)))
             .thenReturn(LLMResponse.success("java", 5L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("How to use Java?");
 
         assertNotNull(result);
         assertFalse(result.documents().isEmpty());
-        assertEquals("Java content here", result.documents().get(0).content());
+        DocumentChunk chunk = result.documents().get(0);
+        assertEquals(CHUNK1_ID, chunk.id());
+        assertNull(chunk.content());
+        assertEquals("Java summary", chunk.summary());
     }
 
     @Test
@@ -111,12 +111,12 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success(
                 "{\"selectedIndex\": 0, \"reasoning\": \"relevant\", \"confidence\": 0.95}", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Programming guide");
 
         assertNotNull(result);
         assertFalse(result.documents().isEmpty());
-        assertEquals("Java content here", result.documents().get(0).content());
+        assertEquals(CHUNK1_ID, result.documents().get(0).id());
     }
 
     @Test
@@ -131,7 +131,7 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success(
                 "{\"selectedIndex\": 0, \"reasoning\": \"java guide\", \"confidence\": 0.9}", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Something about technology");
 
         assertNotNull(result);
@@ -146,7 +146,7 @@ class HybridNavigatorTest {
 
         // Raw query "java programming" splits to ["java", "programming"]
         // "java" -> tech_leaf (LEAF), so no navigation step
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("java programming");
 
         assertNotNull(result);
@@ -163,7 +163,7 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success(
                 "{\"selectedIndex\": 0, \"reasoning\": \"unsure\", \"confidence\": 0.2}", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Programming stuff");
 
         assertNotNull(result);
@@ -177,7 +177,7 @@ class HybridNavigatorTest {
         when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.DECIDE_NAVIGATION)))
             .thenReturn(LLMResponse.success("not valid json at all", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         assertThrows(Exception.class,
             () -> navigator.navigate("Test query"));
     }
@@ -189,12 +189,12 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success("law", 5L));
 
         // "law" matches legal_leaf (LEAF) directly — no navigation step
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("What is the law?");
 
         assertNotNull(result);
         assertFalse(result.documents().isEmpty());
-        assertEquals("Legal content here", result.documents().get(0).content());
+        assertEquals(CHUNK2_ID, result.documents().get(0).id());
     }
 
     @Test
@@ -202,13 +202,13 @@ class HybridNavigatorTest {
         when(llm.chat(anyString(), eq(SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS)))
             .thenReturn(LLMResponse.success("java\ntutorial", 5L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Java tutorial");
 
         assertNotNull(result);
-        boolean hasJavaContent = result.documents().stream()
-            .anyMatch(d -> "Java content here".equals(d.content()));
-        assertTrue(hasJavaContent, "Should find Java content from keyword match");
+        boolean hasJavaChunk = result.documents().stream()
+            .anyMatch(d -> CHUNK1_ID.equals(d.id()));
+        assertTrue(hasJavaChunk, "Should find Java chunk from keyword match");
     }
 
     @Test
@@ -220,7 +220,7 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success(
                 "{\"selectedIndex\": 0, \"reasoning\": \"relevant\", \"confidence\": 0.95}", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Programming guide");
 
         assertNotNull(result.path());
@@ -238,12 +238,12 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success(
                 "{\"action\":\"expand_multiple\",\"selectedIndexes\":[0],\"reasoning\":\"多分支\",\"confidence\":0.7}", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Programming guide");
 
         assertNotNull(result);
         assertFalse(result.documents().isEmpty());
-        assertEquals("Java content here", result.documents().get(0).content());
+        assertEquals(CHUNK1_ID, result.documents().get(0).id());
     }
 
     @Test
@@ -256,7 +256,7 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success(
                 "{\"action\":\"fallback_search\",\"reasoning\":\"无相关子节点\"}", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Programming stuff");
 
         assertNotNull(result);
@@ -272,7 +272,7 @@ class HybridNavigatorTest {
             .thenReturn(LLMResponse.success(
                 "{\"action\":\"expand_multiple\",\"selectedIndexes\":[99],\"reasoning\":\"越界\"}", 10L));
 
-        navigator = new HybridNavigator(tree, dictionary, llm, chunkStore, 10, new DefaultHookExecutor());
+        navigator = new HybridNavigator(tree, dictionary, llm, 10, new DefaultHookExecutor());
         NavigationResult result = navigator.navigate("Programming stuff");
 
         assertNotNull(result);

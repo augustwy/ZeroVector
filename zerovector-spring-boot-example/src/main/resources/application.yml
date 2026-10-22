@@ -11,28 +11,36 @@ spring:
       chat:
         completions-path: /chat/completions
 
-# ZeroVector配置
 zerovector:
   enabled: true
+  storage-base-path: ./data/knowledge_bases
   use-sharded-storage: true
   shard-size: 100
   model:
-    heavy: gpt-4o-mini
-    light: gpt-4o-mini
-    fast: gpt-4o-mini
+    heavy: gpt-4o-mini   # 文档理解、聚类、摘要
+    light: gpt-4o-mini   # 关键词、实体、示例问题
+    fast: gpt-4o-mini    # 导航、查询抽词、最终问答
   concurrency:
-    max-concurrent-requests: 1
-    requests-per-second: 1
+    max-concurrent-requests: 2
+    max-navigation-steps: 20
+  llm-context:
+    max-chunk-chars: 4000
+    chapter-split-threshold-chars: 100000
   rate-limit:
     enabled: true
     max-requests: 5
     window-seconds: 60
+  cache:
+    enabled: true
+    decide-navigation:
+      max-size: 5000
+      expire-after-access: 1
+      time-unit: HOURS
   hook:
     enabled: true
     hooks:
       - cn.nexon.zerovector.core.hook.LoggingLifecycleHook
 
-# 日志配置
 logging:
   level:
     cn.nexon.zerovector: INFO

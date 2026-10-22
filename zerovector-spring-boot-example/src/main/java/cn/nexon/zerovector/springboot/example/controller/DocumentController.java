@@ -21,12 +21,16 @@ import cn.nexon.zerovector.core.ai.LLMUsageStats;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.DocumentUploadResult;
-import cn.nexon.zerovector.core.util.FileUtils;
+import cn.nexon.zerovector.core.model.SourceMode;
 import cn.nexon.zerovector.springboot.SearchResult;
 import cn.nexon.zerovector.springboot.SemanticHub;
-import org.springframework.beans.factory.annotation.Autowired;
+import cn.nexon.zerovector.springboot.example.util.DocumentTextExtractor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -37,10 +41,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
- * 文档控制器
- * 提供文档上传和搜索的 REST API
+ * 文档上传与检索 REST API。
  */
 @RestController
 @RequestMapping("/api/documents")
@@ -48,206 +52,148 @@ public class DocumentController {
 
     private final SemanticHub semanticHub;
 
-    @Autowired
     public DocumentController(SemanticHub semanticHub) {
         this.semanticHub = semanticHub;
     }
 
-    /**
-     * 上传文档
-     * 上传文档并进行语义理解处理
-     *
-     * @param file 上传的文件
-     * @return 处理结果，包含 LLM 调用统计
-     */
     @PostMapping("/upload")
     public ResponseEntity<Map<String, Object>> uploadDocument(
-            @RequestParam("file") MultipartFile file) {
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "mode", defaultValue = "COPY") SourceMode mode) {
         Map<String, Object> response = new HashMap<>();
+        if (file == null || file.isEmpty()) {
+            response.put("success", false);
+            response.put("message", "文件不能为空");
+            return ResponseEntity.badRequest().body(response);
+        }
 
+        Path uploaded = null;
+        Path prepared = null;
         try {
-            if (file.isEmpty()) {
-                response.put("success", false);
-                response.put("message", "文件不能为空");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            String originalFilename = file.getOriginalFilename();
-            Path currentDir = Paths.get("").toAbsolutePath();
-            String uploadDir = currentDir.resolve("uploads").toString();
-            Path uploadPath = Paths.get(uploadDir);
-
-            if (!Files.exists(uploadPath)) {
-                Files.createDirectories(uploadPath);
-            }
-
-            String safeFilename = Paths.get(originalFilename).getFileName().toString();
-            Path filePath = uploadPath.resolve(safeFilename);
-            file.transferTo(filePath.toFile());
-
-            DocumentUploadResult result = semanticHub.addDocument(filePath);
+            uploaded = saveUpload(file);
+            prepared = DocumentTextExtractor.toText(uploaded, uploaded.getParent());
+            DocumentUploadResult result = semanticHub.addDocument(prepared, mode, null);
 
             response.put("success", result.success());
             response.put("message", result.message());
             response.put("documentId", result.documentId());
             response.put("documentTitle", result.documentTitle());
             response.put("skipped", result.skipped());
-            response.put("filename", originalFilename);
-            response.put("filePath", filePath.toString());
-
-            Map<String, Object> llmStats = toLlmStatsMap(result.llmUsageStats());
-            if (llmStats != null) {
-                response.put("llmUsageStats", llmStats);
+            response.put("filename", file.getOriginalFilename());
+            Map<String, Object> stats = toStatsMap(result.llmUsageStats());
+            if (stats != null) {
+                response.put("llmUsageStats", stats);
             }
-
             return ResponseEntity.ok(response);
-
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             response.put("success", false);
-            response.put("message", "文件上传失败: " + e.getMessage());
+            response.put("message", "文件处理失败: " + e.getMessage());
             return ResponseEntity.internalServerError().body(response);
+        } finally {
+            // REFERENCE 直接依赖上传文件，必须保留；COPY 的正文已写入托管副本，可以清理
+            if (mode != SourceMode.REFERENCE) {
+                deleteQuietly(prepared, uploaded);
+            }
         }
     }
 
-    /**
-     * 批量上传文档
-     * 批量上传多个文档并进行语义理解处理
-     *
-     * @param files 上传的文件列表
-     * @return 处理结果列表，包含每个文档的 LLM 调用统计
-     */
     @PostMapping("/upload/batch")
     public ResponseEntity<Map<String, Object>> uploadDocuments(
-            @RequestParam("files") MultipartFile[] files) {
+            @RequestParam("files") MultipartFile[] files,
+            @RequestParam(value = "mode", defaultValue = "COPY") SourceMode mode) {
         Map<String, Object> response = new HashMap<>();
+        if (files == null || files.length == 0) {
+            response.put("success", false);
+            response.put("message", "文件列表不能为空");
+            return ResponseEntity.badRequest().body(response);
+        }
 
+        List<Path> prepared = new ArrayList<>();
+        List<Path> uploaded = new ArrayList<>();
+        List<MultipartFile> accepted = new ArrayList<>();
         try {
-            if (files == null || files.length == 0) {
-                response.put("success", false);
-                response.put("message", "文件列表不能为空");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            Path currentDir = Paths.get("").toAbsolutePath();
-            String uploadDir = currentDir.resolve("uploads").toString();
-            Path uploadPath = Paths.get(uploadDir);
-
-            if (!Files.exists(uploadPath)) {
-                Files.createDirectories(uploadPath);
-            }
-
-            List<Path> filePaths = new ArrayList<>();
             for (MultipartFile file : files) {
-                if (!file.isEmpty()) {
-                    String originalFilename = file.getOriginalFilename();
-                    Path filePath = uploadPath.resolve(originalFilename);
-                    file.transferTo(filePath.toFile());
-                    filePaths.add(filePath);
+                if (file == null || file.isEmpty()) {
+                    continue;
                 }
+                Path saved = saveUpload(file);
+                uploaded.add(saved);
+                prepared.add(DocumentTextExtractor.toText(saved, saved.getParent()));
+                accepted.add(file);
             }
 
-            List<DocumentUploadResult> results = semanticHub.addDocuments(filePaths);
-
+            List<DocumentUploadResult> results = semanticHub.addDocuments(prepared, mode, null);
             int successCount = 0;
             int skippedCount = 0;
             int failureCount = 0;
-            int totalTokens = 0;
-            int totalCallCount = 0;
-            long totalDurationMs = 0;
+            List<Map<String, Object>> documents = new ArrayList<>();
 
-            List<Map<String, Object>> documentResults = new ArrayList<>();
             for (int i = 0; i < results.size(); i++) {
                 DocumentUploadResult result = results.get(i);
-                Map<String, Object> docResult = new HashMap<>();
-                docResult.put("documentId", result.documentId());
-                docResult.put("documentTitle", result.documentTitle());
-                docResult.put("success", result.success());
-                docResult.put("skipped", result.skipped());
-                docResult.put("message", result.message());
-                docResult.put("filename", files[i].getOriginalFilename());
+                Map<String, Object> item = new HashMap<>();
+                item.put("documentId", result.documentId());
+                item.put("documentTitle", result.documentTitle());
+                item.put("success", result.success());
+                item.put("skipped", result.skipped());
+                item.put("message", result.message());
+                item.put("filename", accepted.get(i).getOriginalFilename());
 
-                if (result.success()) {
+                if (result.success() && !result.skipped()) {
                     successCount++;
                 } else if (result.skipped()) {
                     skippedCount++;
                 } else {
                     failureCount++;
                 }
-
-                LLMUsageStats stats = result.llmUsageStats();
-                if (stats != null) {
-                    totalTokens += stats.getTotalTokens();
-                    totalCallCount += stats.getCallCount();
-                    totalDurationMs += stats.getTotalDuration();
-
-                    Map<String, Object> llmStats = toLlmStatsMap(stats);
-                    if (llmStats != null) {
-                        docResult.put("llmUsageStats", llmStats);
-                    }
-                }
-
-                documentResults.add(docResult);
+                documents.add(item);
             }
 
             response.put("success", true);
-            response.put("totalFiles", files.length);
+            response.put("totalFiles", accepted.size());
             response.put("successCount", successCount);
             response.put("skippedCount", skippedCount);
             response.put("failureCount", failureCount);
-            response.put("documents", documentResults);
-
-            if (totalCallCount > 0) {
-                Map<String, Object> totalLlmStats = new HashMap<>();
-                totalLlmStats.put("callCount", totalCallCount);
-                totalLlmStats.put("totalTokens", totalTokens);
-                totalLlmStats.put("totalDurationMs", totalDurationMs);
-                response.put("totalLlmUsageStats", totalLlmStats);
-            }
-
+            response.put("documents", documents);
             return ResponseEntity.ok(response);
-
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             response.put("success", false);
             response.put("message", "批量上传失败: " + e.getMessage());
             return ResponseEntity.internalServerError().body(response);
+        } finally {
+            if (mode != SourceMode.REFERENCE) {
+                for (Path path : prepared) {
+                    deleteQuietly(path, null);
+                }
+                for (Path path : uploaded) {
+                    deleteQuietly(path, null);
+                }
+            }
         }
     }
 
-    /**
-     * 搜索接口
-     * 执行语义搜索并返回结果，包含 LLM 调用统计信息
-     *
-     * @param query 查询字符串
-     * @return 搜索结果
-     */
     @GetMapping("/search")
     public ResponseEntity<Map<String, Object>> search(@RequestParam("query") String query) {
         Map<String, Object> response = new HashMap<>();
+        if (query == null || query.trim().isEmpty()) {
+            response.put("success", false);
+            response.put("message", "查询内容不能为空");
+            return ResponseEntity.badRequest().body(response);
+        }
 
         try {
-            if (query == null || query.trim().isEmpty()) {
-                response.put("success", false);
-                response.put("message", "查询内容不能为空");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            SearchResult searchResult = semanticHub.search(query);
-
+            SearchResult result = semanticHub.search(query);
             response.put("success", true);
             response.put("query", query);
-            response.put("reasoning", searchResult.reasoning());
-            response.put("documents", searchResult.documents());
-            response.put("path", searchResult.path());
-            response.put("documentCount", searchResult.documents() != null ? searchResult.documents().size() : 0);
-
-            Map<String, Object> llmStats = toLlmStatsMap(searchResult.llmUsageStats());
-            if (llmStats != null) {
-                response.put("llmUsageStats", llmStats);
+            response.put("reasoning", result.reasoning());
+            response.put("documents", result.documents());
+            response.put("path", result.path());
+            response.put("documentCount", result.documents().size());
+            Map<String, Object> stats = toStatsMap(result.llmUsageStats());
+            if (stats != null) {
+                response.put("llmUsageStats", stats);
             }
-
             return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             response.put("success", false);
             response.put("message", "查询失败: " + e.getMessage());
             return ResponseEntity.internalServerError().body(response);
@@ -257,46 +203,51 @@ public class DocumentController {
     @PostMapping("/ask")
     public ResponseEntity<Map<String, Object>> ask(@RequestParam("query") String query) {
         Map<String, Object> response = new HashMap<>();
+        if (query == null || query.trim().isEmpty()) {
+            response.put("success", false);
+            response.put("message", "问题不能为空");
+            return ResponseEntity.badRequest().body(response);
+        }
 
         try {
-            if (query == null || query.trim().isEmpty()) {
-                response.put("success", false);
-                response.put("message", "问题不能为空");
-                return ResponseEntity.badRequest().body(response);
-            }
-
             SearchResult searchResult = semanticHub.search(query);
             List<DocumentChunk> chunks = searchResult.documents();
-
-            if (chunks == null || chunks.isEmpty()) {
+            if (chunks.isEmpty()) {
                 response.put("success", false);
                 response.put("message", "未找到相关文档");
                 return ResponseEntity.ok(response);
             }
 
             String prompt = """
-                根据以下文档内容回答用户的问题。如果文档中没有相关信息，请如实说明。
+                    根据以下文档内容回答用户的问题。如果文档中没有相关信息，请如实说明。
 
-                用户问题：%s
+                    用户问题：%s
 
-                相关文档：
-                %s
-                请用中文回答。
-                """.formatted(query, searchResult.toDocumentText());
+                    相关文档：
+                    %s
+
+                    请用中文回答。
+                    """.formatted(query, searchResult.toDocumentText());
 
             LLMResponse llmResponse = semanticHub.getLlmProvider()
-                .chat(prompt, SmartCacheStrategy.RequestType.GENERATE_SUMMARY);
+                    .chat(prompt, SmartCacheStrategy.RequestType.ANSWER_QUESTION);
+            if (!llmResponse.success()) {
+                response.put("success", false);
+                response.put("message", "回答生成失败: " + llmResponse.errorMessage());
+                return ResponseEntity.internalServerError().body(response);
+            }
 
             LLMUsageStats totalStats = new LLMUsageStats();
             totalStats.add(llmResponse);
-            if (searchResult.llmUsageStats() != null) {
-                totalStats.merge(searchResult.llmUsageStats());
-            }
+            totalStats.merge(searchResult.llmUsageStats());
 
             List<Map<String, Object>> sources = new ArrayList<>();
             for (int i = 0; i < chunks.size(); i++) {
-                DocumentChunk c = chunks.get(i);
-                sources.add(Map.of("index", i + 1, "id", c.id(), "summary", c.summary(), "filePath", c.filePath() != null ? c.filePath() : ""));
+                DocumentChunk chunk = chunks.get(i);
+                sources.add(Map.of(
+                        "index", i + 1,
+                        "id", chunk.id(),
+                        "summary", chunk.summary()));
             }
 
             response.put("success", true);
@@ -305,43 +256,61 @@ public class DocumentController {
             response.put("sources", sources);
             response.put("sourceCount", sources.size());
             response.put("searchReasoning", searchResult.reasoning());
-
-            Map<String, Object> llmStats = toLlmStatsMap(totalStats);
-            if (llmStats != null) {
-                response.put("llmUsageStats", llmStats);
+            Map<String, Object> stats = toStatsMap(totalStats);
+            if (stats != null) {
+                response.put("llmUsageStats", stats);
             }
-
             return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             response.put("success", false);
             response.put("message", "问答失败: " + e.getMessage());
             return ResponseEntity.internalServerError().body(response);
         }
     }
 
-    /**
-     * 健康检查接口
-     */
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
-        Map<String, String> response = new HashMap<>();
-        response.put("status", "ok");
-        response.put("message", "Document API is running");
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(Map.of("status", "ok", "message", "Document API is running"));
     }
 
-    private static Map<String, Object> toLlmStatsMap(LLMUsageStats stats) {
+    private Path saveUpload(MultipartFile file) throws IOException {
+        Path uploadDir = Paths.get("uploads").toAbsolutePath();
+        Files.createDirectories(uploadDir);
+        String original = file.getOriginalFilename() == null ? "upload" : file.getOriginalFilename();
+        String safeName = Paths.get(original).getFileName().toString().replaceAll("[\\\\/:*?\"<>|]", "_");
+        Path target = uploadDir.resolve(UUID.randomUUID() + "_" + safeName);
+        file.transferTo(target);
+        return target;
+    }
+
+    private static void deleteQuietly(Path first, Path second) {
+        try {
+            if (first != null) {
+                Files.deleteIfExists(first);
+            }
+        } catch (IOException ignored) {
+            // best effort
+        }
+        if (second != null && !second.equals(first)) {
+            try {
+                Files.deleteIfExists(second);
+            } catch (IOException ignored) {
+                // best effort
+            }
+        }
+    }
+
+    private static Map<String, Object> toStatsMap(LLMUsageStats stats) {
         if (stats == null || stats.getCallCount() <= 0) {
             return null;
         }
-        Map<String, Object> llmStats = new HashMap<>();
-        llmStats.put("callCount", stats.getCallCount());
-        llmStats.put("totalTokens", stats.getTotalTokens());
-        llmStats.put("inputTokens", stats.getTotalInputTokens());
-        llmStats.put("outputTokens", stats.getTotalOutputTokens());
-        llmStats.put("totalDurationMs", stats.getTotalDuration());
-        llmStats.put("averageDurationMs", stats.getAverageDuration());
-        return llmStats;
+        Map<String, Object> result = new HashMap<>();
+        result.put("callCount", stats.getCallCount());
+        result.put("totalTokens", stats.getTotalTokens());
+        result.put("inputTokens", stats.getTotalInputTokens());
+        result.put("outputTokens", stats.getTotalOutputTokens());
+        result.put("totalDurationMs", stats.getTotalDuration());
+        result.put("averageDurationMs", stats.getAverageDuration());
+        return result;
     }
 }

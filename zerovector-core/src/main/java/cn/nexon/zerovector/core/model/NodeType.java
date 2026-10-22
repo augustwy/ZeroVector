@@ -17,10 +17,14 @@
 package cn.nexon.zerovector.core.model;
 
 /**
- * 语义树节点类型枚举
+ * 语义树节点类型。
+ *
+ * <p>{@link #DOCUMENT} 用于大文档的文档节点：其子节点是章节叶子；
+ * 小文档仍然直接是 {@link #LEAF}。
  */
 public enum NodeType {
-    ROOT,      // 根节点
-    CATEGORY,  // 分类节点
-    LEAF       // 叶子节点（包含文档块）
+    ROOT,
+    CATEGORY,
+    DOCUMENT,
+    LEAF
 }

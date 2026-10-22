@@ -4,26 +4,25 @@
 
 **Zero-Copy, Zero-Distortion, Zero-Embedding Knowledge Base.**
 
-ZeroVector 是一款基于 Java 25 构建的新一代知识库系统，拒绝传统的**向量切片**方案，回归文档的**原生逻辑结构**（章节树）。利用 **Memory Mapped Files (mmap)** 和 **Structured Concurrency** 实现近乎零拷贝的高性能文件读取。
+ZeroVector 是一款基于 Java 25 构建的新一代知识库系统，拒绝传统的**向量切片**方案，回归文档的**原生逻辑结构**（章节树）。利用 **Memory Mapped Files (mmap)** 与**虚拟线程**实现高性能的内容读取与并发处理。
 
 ## 核心特性
 
-- 🚀 **Zero-Copy IO** — 基于 mmap 的毫秒级大文件读取
-- 📚 **Chapter-Aware** — 以"章/节"为检索单位，而非碎切片段
-- 🧠 **Long-Context Native** — 适配 128k~2M Token 长窗口大模型
-- 📉 **Cost Efficient** — 无需 GPU 向量训练，无需向量数据库
-- 🔍 **Hybrid Navigation** — 关键词倒排索引 + LLM 语义推理
-- 📦 **Sharded Storage** — 分片存储，按需加载
-- 🔌 **SPI 扩展** — 存储层支持自定义实现（mmap / Elasticsearch / MinIO）
+- 🚀 **Zero-Copy IO** — 内联正文基于 mmap，大文件流式解析并按源区间读取，命中多少读多少。
+- 📚 **Chapter-Aware** — 小文档整篇保留，大文档按章/节检索，而不是碎切片段。
+- 🧠 **Long-Context Native** — 章节摘要用于导航，原文用于回答，按需适配长窗口模型。
+- 📉 **Cost Efficient** — 无需 GPU 向量训练，无需向量数据库。
+- 🔍 **Hybrid Navigation** — 关键词倒排索引 + LLM 语义推理。
+- 📦 **Sharded Storage** — 分片存储，按需加载。
+- 🔌 **SPI 扩展** — 存储层支持自定义实现（mmap / Elasticsearch / MinIO）。
 
 ## 项目结构
 
 ```
 ZeroVector/
-├── zerovector-core/                    # 核心模块（纯 Java，无框架依赖）
-├── zerovector-app/                     # 独立应用脚手架（预留）
-├── zerovector-spring-boot-starter/     # Spring Boot 4 自动配置
-├── zerovector-spring-boot-example/     # 可运行示例（REST API + Web UI）
+├── zerovector-core/                    # 纯 Java 核心：语义树、流式切片、导航、存储、缓存
+├── zerovector-spring-boot-starter/     # Spring Boot 4 自动配置 + SemanticHub
+├── zerovector-spring-boot-example/     # 可运行示例：REST API + 上传/检索/问答
 └── data/                               # 运行时数据目录（由 .gitignore 排除）
 ```
 
@@ -38,7 +37,7 @@ ZeroVector/
 
 ```bash
 ./mvnw clean compile     # 编译
-./mvnw test              # 运行测试（173 cases）
+./mvnw test              # 运行测试（190 core cases + 1 context test）
 ```
 
 ### 启动示例
@@ -63,21 +62,27 @@ export AI_OPENAI_BASE_URL=https://api.openai.com   # 可选，兼容三方 API
 
 ## 架构概览
 
-```
-文档 → DocumentComprehender（LLM 理解）→ TreeBuilder（语义树构建）
-                                            ↓
-查询 → 关键词定位 → HybridNavigator（LLM 导航）→ mmap 内容读取 → 结果
+```text
+上传：文件 → 流式解析 → 章节理解 → 语义树
+                     ↘ COPY 副本 / REFERENCE 原文件
+                     ↘ 内联正文 → mmap
+
+查询：关键词定位 → LLM 树导航（只读摘要）→ 命中章节
+
+回答：按源文件区间 / mmap 内联内容读取原文
 ```
 
 | 组件 | 职责 |
 |------|------|
+| `StreamingDocumentChunker` | 流式解析文件，边读边记录章节区间，不把整篇文档塞进内存 |
+| `DocumentSourceStore` | 托管 UTF-8 副本或引用原文件，回答时按字节区间读取章节 |
 | `DocumentComprehender` | 调用 LLM 提取摘要、关键词、实体、示例问题 |
-| `TreeBuilder` | 将文档按主题聚类为 ROOT → CATEGORY → LEAF 三层语义树 |
-| `HybridNavigator` | Phase 1 关键词倒排 + Phase 2 LLM 导航决策 |
-| `KeywordDictionary` | 关键词 → 节点倒排索引，解决专有名词识别 |
-| `MMapDocumentStore` | mmap 零拷贝存储，支持索引持久化与压缩 |
-| `ShardedTreeStorage` | 语义树分片存储，Caffeine 懒加载 |
-| `CachedLLMProvider` | 按 RequestType 分类缓存，Levenshtein 相似去重 |
+| `TreeBuilder` | 将文档/章节组织成可导航的语义树，支持增量更新 |
+| `HybridNavigator` | 关键词倒排 + LLM 树导航 + 兜底检索，导航阶段不加载正文 |
+| `KeywordDictionary` | 关键词 → 节点倒排索引，专治专有名词和精确匹配 |
+| `MMapDocumentStore` | 内联正文的 mmap 存储，支持索引持久化与压缩 |
+| `ShardedTreeStorage` | 语义树分片存储，按代际提交，Caffeine 懒加载 |
+| `CachedLLMProvider` | 按请求类型分桶缓存，只缓存成功响应 |
 
 ## Spring Boot 集成
 
@@ -101,20 +106,25 @@ zerovector:
   shard-size: 100
 
   model:
-    heavy: gpt-4o-mini    # 离线复杂任务（理解、聚类、摘要）
-    light: gpt-4o-mini    # 离线简单任务（关键词、实体提取）
-    fast: gpt-4o-mini     # 在线快速任务（导航决策）
+    heavy: gpt-4o-mini    # 文档理解、聚类、摘要
+    light: gpt-4o-mini    # 关键词、实体、示例问题
+    fast: gpt-4o-mini     # 导航、查询抽词、最终问答
 
   concurrency:
-    max-concurrent-requests: 5
-    requests-per-second: 2.0
+    max-concurrent-requests: 2
+    max-navigation-steps: 20
+
+  llm-context:
+    max-chunk-chars: 4000                  # 单次 LLM 调用的最大字符数
+    chapter-split-threshold-chars: 100000  # 超过该字符数才按章节切片
+
+  rate-limit:
+    enabled: true
+    max-requests: 5
+    window-seconds: 60
 
   cache:
     enabled: true
-    comprehend-chunk:
-      max-size: 5000
-      expire-after-access: 4
-      time-unit: HOURS
     decide-navigation:
       max-size: 5000
       expire-after-access: 1
@@ -126,21 +136,27 @@ zerovector:
       - cn.nexon.zerovector.core.hook.LoggingLifecycleHook
 ```
 
+LLM 提供者会按 classpath 自动选择 Spring AI 或 LangChain4j；若同时存在多个候选，请标记 `@Primary` 或提供唯一的 `LLMProvider` Bean。
+
 ### 代码示例
 
 ```java
 @Service
 public class YourService {
 
-    @Autowired
-    private SemanticHub semanticHub;
+    private final SemanticHub hub;
 
-    public void addDocument(Path filePath) {
-        semanticHub.addDocument(filePath);
+    public YourService(SemanticHub hub) {
+        this.hub = hub;
     }
 
-    public SearchResult search(String query) {
-        return semanticHub.search(query);
+    public DocumentUploadResult add(Path file) {
+        return hub.addDocument(file);
+    }
+
+    public String ask(String query) {
+        SearchResult result = hub.search(query);
+        return result.toDocumentText();
     }
 }
 ```
@@ -149,22 +165,22 @@ public class YourService {
 
 ```java
 // 创建知识库（返回 SemanticTreeManager）
-SemanticTreeManager kb = semanticHub.createKnowledgeBase("tech-docs");
+SemanticTreeManager kb = hub.createKnowledgeBase("tech-docs");
 
 // 添加文档
-semanticHub.addDocument(Paths.get("doc.md"), "tech-docs");
+hub.addDocument(Paths.get("doc.md"), "tech-docs");
 
 // 查询
-SearchResult result = semanticHub.search("什么是单例模式？", "tech-docs");
+SearchResult result = hub.search("什么是单例模式？", "tech-docs");
 
 // 切换知识库
-semanticHub.switchKnowledgeBase("product-docs");
+hub.switchKnowledgeBase("product-docs");
 
 // 列出所有知识库
-List<String> names = semanticHub.listKnowledgeBases();
+List<String> names = hub.listKnowledgeBases();
 
 // 删除知识库
-semanticHub.deleteKnowledgeBase("old-docs");
+hub.deleteKnowledgeBase("old-docs");
 ```
 
 ## 无 Spring 框架使用
@@ -174,35 +190,40 @@ LLMProvider llm = new YourLLMProvider();
 DocumentComprehender comprehender = new DocumentComprehender(llm, 4000);
 SemanticTreeManager manager = new SemanticTreeManager(
     llm, comprehender, Paths.get("./data/knowledge_bases/default"),
-    true, new ConcurrencyProperties());
-// 注意：构造时已自动初始化本地存储，无需额外调用 initialize()
+    true, 100, new ConcurrencyProperties(), new DefaultHookExecutor());
+// 构造时已完成存储初始化与已有树加载，无需 initialize()
 
-// 上传文档
+// 默认 COPY + AUTO：小文档整篇，超过 100k 字符才按章节切片
 manager.addDocument(Paths.get("document.md"));
 
-// 查询
-NavigationResult result = manager.navigate("什么是单例模式？");
+// 可选 REFERENCE：只保存原文件路径，不复制；必须保证原文件长期存在
+manager.addDocument(Paths.get("document.md"), SourceMode.REFERENCE);
 
+// 可显式覆盖：WHOLE 强制整篇，CHAPTER 强制章节
+manager.addDocument(Paths.get("document.md"), SourceMode.COPY, ChunkingPolicy.CHAPTER);
+
+NavigationResult result = manager.navigate("如何配置集群？");
+// result.documents() 只有文档/章节摘要；需要回答时才读原文
+String text = manager.readChunkContent(result.documents().get(0));
 manager.close();
 ```
 
 ## 存储层 SPI 扩展
 
-三类接口，通过 `ServiceLoader` 发现：
+两个接口，通过 `ServiceLoader` 发现：
 
 | 接口 | 存储内容 | 默认实现 |
 |------|---------|---------|
-| `ChunkStorage` | 文档分片 | `LocalFileChunkStorage`（mmap） |
-| `DictionaryStorage` | 关键词字典 | `LocalFileDictionaryStorage`（JSON） |
-| `DocumentCopyStorage` | 文件副本 | `LocalFileDocumentCopyStorage` |
+| `ChunkStorage` | 接口直传小文档的内联正文（大文件原文走 `DocumentSourceStore`） | `LocalFileChunkStorage`（mmap） |
+| `DictionaryStorage` | 关键词字典整体快照 | `LocalFileDictionaryStorage`（JSON） |
 
-### 自定义实现
+想接自己的存储？实现接口即可：
 
 ```java
-@StorageProvider(type = "elasticsearch", priority = 10, description = "ES 存储")
-public class ESChunkStorage implements ChunkStorage {
+@StorageProvider(type = "elasticsearch", priority = 10, description = "ES 正文存储")
+public class EsChunkStorage implements ChunkStorage {
     @Override
-    public void initialize(ChunkStorageConfig config) throws StorageException {
+    public void initialize(ChunkStorageConfig config) {
         // 从 config.getExtended() 读取 ES 配置
     }
 
@@ -214,11 +235,9 @@ public class ESChunkStorage implements ChunkStorage {
 }
 ```
 
-在 `META-INF/services/cn.nexon.zerovector.core.storage.spi.ChunkStorage` 中注册：
+在 `META-INF/services/cn.nexon.zerovector.core.storage.spi.ChunkStorage` 中登记实现类。
 
-```
-com.example.ESChunkStorage
-```
+> `DictionaryStorage` 只负责整体 `load()` / `save(dictionary)`；字典的增删改由内存中的 `KeywordDictionary` 完成，避免 SPI 层出现两套重复语义。
 
 ## 使用场景
 

@@ -72,7 +72,9 @@ class ShardedTreeStorageTest {
 
             DocumentChunk loadedChunk = loaded.getChunk("chunk1");
             assertNotNull(loadedChunk);
-            assertEquals("chunk content", loadedChunk.content());
+            // 树文件只保存元数据，正文由 ChunkStorage 负责
+            assertNull(loadedChunk.content());
+            assertEquals("summary", loadedChunk.summary());
         }
     }
 
@@ -148,7 +150,8 @@ class ShardedTreeStorageTest {
 
             DocumentChunk fetchedChunk = storage.getChunk("chunk1");
             assertNotNull(fetchedChunk);
-            assertEquals("lazy content", fetchedChunk.content());
+            assertNull(fetchedChunk.content());
+            assertEquals("sum", fetchedChunk.summary());
         }
     }
 

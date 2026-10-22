@@ -98,26 +98,26 @@ class ModelTests {
     // --- DocumentChunk tests ---
 
     @Test
-    void documentChunk_withContent_createsContentBased() {
+    void documentChunk_withContent_hasContent() {
         DocumentChunk chunk = DocumentChunk.withContent("c1", "content body", "summary", Map.of());
         assertEquals("c1", chunk.id());
         assertEquals("content body", chunk.content());
-        assertFalse(chunk.isFilePathBased());
-        assertEquals("content body", chunk.getActualContent());
+        assertTrue(chunk.hasContent());
     }
 
     @Test
-    void documentChunk_withFilePath_createsFileBased() {
-        DocumentChunk chunk = DocumentChunk.withFilePath("c1", "summary", "/path/to/file", Map.of());
+    void documentChunk_metadataOnly_hasNoContent() {
+        DocumentChunk chunk = DocumentChunk.metadataOnly("c1", "summary", "md5", Map.of());
         assertEquals("c1", chunk.id());
         assertNull(chunk.content());
-        assertTrue(chunk.isFilePathBased());
-        assertNull(chunk.getActualContent());
+        assertFalse(chunk.hasContent());
+        assertEquals("md5", chunk.md5());
     }
 
     @Test
     void documentChunk_defaultsMetadata() {
-        DocumentChunk chunk = new DocumentChunk("c1", "content", "summary", null, null, null);
+        DocumentChunk chunk = new DocumentChunk("c1", "content", "summary", null, null,
+                null, 0, 0, null);
         assertNotNull(chunk.metadata());
         assertTrue(chunk.metadata().isEmpty());
     }
@@ -180,15 +180,12 @@ class ModelTests {
     }
 
     @Test
-    void keywordDefinition_rejectsNullDefinition() {
-        assertThrows(IllegalArgumentException.class,
-            () -> new KeywordDefinition("key", null, "ctx", "doc1", 1));
-    }
-
-    @Test
-    void keywordDefinition_rejectsNullDocumentId() {
-        assertThrows(IllegalArgumentException.class,
-            () -> new KeywordDefinition("key", "def", "ctx", null, 1));
+    void keywordDefinition_allowsMissingOptionalFields() {
+        KeywordDefinition definition = new KeywordDefinition("key", null, null, null, 1);
+        assertEquals("key", definition.keyword());
+        assertEquals("", definition.definition());
+        assertEquals("", definition.context());
+        assertEquals("", definition.documentId());
     }
 
     @Test
@@ -255,9 +252,9 @@ class ModelTests {
     // --- NodeType tests ---
 
     @Test
-    void nodeType_hasThreeValues() {
-        assertEquals(3, NodeType.values().length);
+    void nodeType_hasFourValues() {
+        assertEquals(4, NodeType.values().length);
         assertTrue(java.util.Arrays.asList(NodeType.values()).containsAll(
-            List.of(NodeType.ROOT, NodeType.CATEGORY, NodeType.LEAF)));
+            List.of(NodeType.ROOT, NodeType.CATEGORY, NodeType.DOCUMENT, NodeType.LEAF)));
     }
 }

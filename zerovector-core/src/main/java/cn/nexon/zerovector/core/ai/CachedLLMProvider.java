@@ -18,7 +18,6 @@ package cn.nexon.zerovector.core.ai;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,23 +25,37 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 /**
- * 缓存LLM提供者，按 RequestType 分类缓存。
+ * 带缓存的 LLM 提供者：按 {@link SmartCacheStrategy.RequestType} 分桶缓存。
+ *
+ * <p>缓存值同时保存原始 prompt，避免“响应还在缓存、prompt 已被单独缓存淘汰”
+ * 导致相似匹配失效。只缓存成功响应；失败调用下次会重新请求。
  */
 public class CachedLLMProvider implements LLMProvider {
+
     private static final Logger logger = LoggerFactory.getLogger(CachedLLMProvider.class);
 
+    private static final Set<SmartCacheStrategy.RequestType> SIMILARITY_ENABLED_TYPES = Set.of(
+            SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS,
+            SmartCacheStrategy.RequestType.EXTRACT_ENTITIES,
+            SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS,
+            SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS
+    );
+
     private final LLMProvider delegate;
-    private final Map<SmartCacheStrategy.RequestType, Cache<String, LLMResponse>> caches;
+    private final Map<SmartCacheStrategy.RequestType, Cache<String, CachedEntry>> caches;
     private final Map<SmartCacheStrategy.RequestType, CacheStatistics> statistics;
     private final Map<SmartCacheStrategy.RequestType, CacheConfig> configs;
-    private final Map<String, String> similarPromptCache;
     private final SimilarityConfig similarityConfig;
 
+    private volatile int maxSearchItems = 100;
+
+    private record CachedEntry(LLMResponse response, String prompt) {
+    }
+
     public CachedLLMProvider(LLMProvider delegate) {
-        this(delegate, getDefaultConfigs());
+        this(delegate, getDefaultConfigs(), SimilarityConfig.DEFAULT);
     }
 
     public CachedLLMProvider(LLMProvider delegate, Map<SmartCacheStrategy.RequestType, CacheConfig> configs) {
@@ -56,10 +69,6 @@ public class CachedLLMProvider implements LLMProvider {
         this.similarityConfig = similarityConfig != null ? similarityConfig : SimilarityConfig.DEFAULT;
         this.caches = new ConcurrentHashMap<>();
         this.statistics = new ConcurrentHashMap<>();
-        this.similarPromptCache = Caffeine.newBuilder()
-                .maximumSize(1000)
-                .<String, String>build()
-                .asMap();
         initializeCaches();
     }
 
@@ -67,20 +76,23 @@ public class CachedLLMProvider implements LLMProvider {
         for (SmartCacheStrategy.RequestType type : SmartCacheStrategy.RequestType.values()) {
             CacheConfig config = configs.getOrDefault(type, SmartCacheStrategy.getConfigForType(type));
             if (config.enabled()) {
-                Cache<String, LLMResponse> cache = Caffeine.newBuilder()
-                    .maximumSize(config.maxSize())
-                    .expireAfterAccess(config.expireAfterAccess(), config.timeUnit())
-                    .recordStats()
-                    .removalListener((key, value, cause) -> {
-                        if (statistics.containsKey(type)) {
-                            statistics.get(type).recordEviction();
-                        }
-                    })
-                    .build();
-                caches.put(type, cache);
+                caches.put(type, buildCache(type, config));
                 statistics.put(type, new CacheStatistics(type.name()));
             }
         }
+    }
+
+    private Cache<String, CachedEntry> buildCache(SmartCacheStrategy.RequestType type, CacheConfig config) {
+        return Caffeine.newBuilder()
+                .maximumSize(Math.max(1, config.maxSize()))
+                .expireAfterAccess(config.expireAfterAccess(), config.timeUnit())
+                .removalListener((key, value, cause) -> {
+                    CacheStatistics stats = statistics.get(type);
+                    if (stats != null) {
+                        stats.recordEviction();
+                    }
+                })
+                .build();
     }
 
     private static Map<SmartCacheStrategy.RequestType, CacheConfig> getDefaultConfigs() {
@@ -93,69 +105,68 @@ public class CachedLLMProvider implements LLMProvider {
 
     @Override
     public LLMResponse chat(String prompt, SmartCacheStrategy.RequestType type) {
-        return getCachedResult(type, prompt, p -> delegate.chat(p, type));
-    }
-
-    private LLMResponse getCachedResult(SmartCacheStrategy.RequestType type, String prompt, java.util.function.Function<String, LLMResponse> loader) {
-        Cache<String, LLMResponse> cache = caches.get(type);
+        Cache<String, CachedEntry> cache = caches.get(type);
         if (cache == null) {
-            return loader.apply(prompt);
+            return delegate.chat(prompt, type);
         }
 
         String cacheKey = SmartCacheStrategy.generateCacheKey(type, prompt);
         CacheStatistics stats = statistics.get(type);
 
-        LLMResponse cached = cache.getIfPresent(cacheKey);
+        CachedEntry cached = cache.getIfPresent(cacheKey);
         if (cached != null) {
             if (stats != null) stats.recordHit();
-            logger.debug("Cache hit for type: {}, key: {}", type, cacheKey);
-            return cached;
+            return cached.response();
         }
 
         if (stats != null) stats.recordMiss();
 
-        LLMResponse similarResult = findSimilarCachedResult(type, prompt, cacheKey);
-        if (similarResult != null) {
-            cache.put(cacheKey, similarResult);
+        CachedEntry similar = findSimilarCachedEntry(type, prompt, cache);
+        if (similar != null) {
+            CachedEntry entry = new CachedEntry(similar.response(), prompt);
+            cache.put(cacheKey, entry);
             if (stats != null) stats.recordHit();
-            logger.debug("Similar cache hit for type: {}, key: {}", type, cacheKey);
-            return similarResult;
+            logger.debug("相似提示词命中缓存: type={}, key={}", type, cacheKey);
+            return entry.response();
         }
 
         long startTime = System.nanoTime();
         try {
-            LLMResponse result = loader.apply(prompt);
-            long loadTime = System.nanoTime() - startTime;
-
-            cache.put(cacheKey, result);
-            if (stats != null) stats.recordLoadSuccess(loadTime);
-
-            similarPromptCache.put(cacheKey, prompt);
-
-            logger.debug("Cache miss and loaded for type: {}, key: {}, loadTime: {}ms",
-                type, cacheKey, loadTime / 1_000_000.0);
-            return result;
-        } catch (Exception e) {
-            long loadTime = System.nanoTime() - startTime;
+            // Caffeine 保证同一个 key 的加载只执行一次，避免并发请求击穿缓存
+            CachedEntry loaded = cache.get(cacheKey,
+                    key -> new CachedEntry(delegate.chat(prompt, type), prompt));
+            if (loaded == null || loaded.response() == null || !loaded.response().success()) {
+                cache.invalidate(cacheKey);
+                if (stats != null) stats.recordLoadFailure();
+                return loaded != null && loaded.response() != null
+                        ? loaded.response()
+                        : LLMResponse.failure("null response");
+            }
+            if (stats != null) stats.recordLoadSuccess(System.nanoTime() - startTime);
+            return loaded.response();
+        } catch (RuntimeException e) {
             if (stats != null) stats.recordLoadFailure();
-            logger.error("Failed to load result for type: {}, key: {}", type, cacheKey, e);
+            logger.error("LLM 调用失败: type={}, key={}", type, cacheKey, e);
             throw e;
         }
     }
 
-    private volatile int maxSearchItems = 100;
-
-    /**
-     * 允许相似提示词模糊命中的请求类型。
-     * 仅限确定性提取类任务；文档理解/聚类/摘要/导航决策对输入高度敏感，
-     * 模糊命中会静默返回错误结果，故排除。
-     */
-    private static final Set<SmartCacheStrategy.RequestType> SIMILARITY_ENABLED_TYPES = Set.of(
-        SmartCacheStrategy.RequestType.EXTRACT_KEYWORDS,
-        SmartCacheStrategy.RequestType.EXTRACT_ENTITIES,
-        SmartCacheStrategy.RequestType.GENERATE_EXAMPLE_QUESTIONS,
-        SmartCacheStrategy.RequestType.EXTRACT_QUERY_KEYWORDS
-    );
+    private CachedEntry findSimilarCachedEntry(SmartCacheStrategy.RequestType type, String prompt,
+                                               Cache<String, CachedEntry> cache) {
+        if (!SIMILARITY_ENABLED_TYPES.contains(type) || !similarityConfig.enableSimilarityMatching()) {
+            return null;
+        }
+        int count = 0;
+        for (CachedEntry entry : cache.asMap().values()) {
+            if (count++ >= maxSearchItems) {
+                break;
+            }
+            if (SmartCacheStrategy.isSimilarPrompt(prompt, entry.prompt(), similarityConfig)) {
+                return entry;
+            }
+        }
+        return null;
+    }
 
     public void setMaxSearchItems(int maxSearchItems) {
         if (maxSearchItems > 0) {
@@ -167,44 +178,25 @@ public class CachedLLMProvider implements LLMProvider {
         return maxSearchItems;
     }
 
-    private LLMResponse findSimilarCachedResult(SmartCacheStrategy.RequestType type, String prompt, String cacheKey) {
-        Cache<String, LLMResponse> cache = caches.get(type);
-        if (cache == null || !SIMILARITY_ENABLED_TYPES.contains(type)) return null;
-
-        int count = 0;
-        for (Map.Entry<String, LLMResponse> entry : cache.asMap().entrySet()) {
-            if (count >= maxSearchItems) break;
-
-            String cachedPrompt = similarPromptCache.get(entry.getKey());
-            if (cachedPrompt != null && SmartCacheStrategy.isSimilarPrompt(prompt, cachedPrompt, similarityConfig)) {
-                return entry.getValue();
-            }
-            count++;
-        }
-        return null;
-    }
-
     public void clearCache() {
         caches.values().forEach(Cache::invalidateAll);
-        similarPromptCache.clear();
         statistics.values().forEach(CacheStatistics::reset);
-        logger.debug("All caches cleared");
+        logger.debug("LLM 缓存已全部清空");
     }
 
     public void clearCache(SmartCacheStrategy.RequestType type) {
-        Cache<String, LLMResponse> cache = caches.get(type);
+        Cache<String, CachedEntry> cache = caches.get(type);
         if (cache != null) {
             cache.invalidateAll();
         }
-        similarPromptCache.keySet().removeIf(key -> key.startsWith(type.name().toLowerCase() + ":"));
-        if (statistics.containsKey(type)) {
-            statistics.get(type).reset();
+        CacheStatistics stats = statistics.get(type);
+        if (stats != null) {
+            stats.reset();
         }
-        logger.debug("Cache cleared for type: {}", type);
     }
 
     public Map<SmartCacheStrategy.RequestType, CacheStatistics> getStatistics() {
-        return new ConcurrentHashMap<>(statistics);
+        return Map.copyOf(statistics);
     }
 
     public CacheStatistics getStatistics(SmartCacheStrategy.RequestType type) {
@@ -212,62 +204,33 @@ public class CachedLLMProvider implements LLMProvider {
     }
 
     public void warmupCache(Map<SmartCacheStrategy.RequestType, List<String>> warmupPrompts) {
-        logger.debug("Starting cache warmup with {} request types", warmupPrompts.size());
-
         warmupPrompts.forEach((type, prompts) -> {
-            if (prompts == null || prompts.isEmpty()) return;
-
-            logger.debug("Warming up cache for type: {} with {} prompts", type, prompts.size());
-            Cache<String, LLMResponse> cache = caches.get(type);
-            if (cache == null) return;
-
-            int successCount = 0;
-            int failureCount = 0;
-
+            Cache<String, CachedEntry> cache = caches.get(type);
+            if (cache == null || prompts == null) {
+                return;
+            }
             for (String prompt : prompts) {
                 try {
-                    String cacheKey = SmartCacheStrategy.generateCacheKey(type, prompt);
-                    if (!cache.asMap().containsKey(cacheKey)) {
-                        LLMResponse result = delegate.chat(prompt, type);
-                        cache.put(cacheKey, result);
-                        similarPromptCache.put(cacheKey, prompt);
-                        successCount++;
+                    LLMResponse response = delegate.chat(prompt, type);
+                    if (response != null && response.success()) {
+                        cache.put(SmartCacheStrategy.generateCacheKey(type, prompt),
+                                new CachedEntry(response, prompt));
                     }
-                } catch (Exception e) {
-                    failureCount++;
-                    logger.warn("Failed to warmup cache for type: {}, prompt: {}", type, prompt, e);
+                } catch (RuntimeException e) {
+                    logger.warn("缓存预热失败: type={}, prompt={}", type, prompt, e);
                 }
             }
-
-            logger.debug("Cache warmup completed for type: {} - Success: {}, Failed: {}",
-                type, successCount, failureCount);
         });
-
-        logger.debug("Cache warmup completed");
     }
 
     public void updateCacheConfig(SmartCacheStrategy.RequestType type, CacheConfig config) {
         configs.put(type, config);
         if (config.enabled()) {
-            Cache<String, LLMResponse> newCache = Caffeine.newBuilder()
-                .maximumSize(config.maxSize())
-                .expireAfterAccess(config.expireAfterAccess(), config.timeUnit())
-                .recordStats()
-                .removalListener((key, value, cause) -> {
-                    if (statistics.containsKey(type)) {
-                        statistics.get(type).recordEviction();
-                    }
-                })
-                .build();
-            caches.put(type, newCache);
-            if (!statistics.containsKey(type)) {
-                statistics.put(type, new CacheStatistics(type.name()));
-            }
+            caches.put(type, buildCache(type, config));
+            statistics.computeIfAbsent(type, key -> new CacheStatistics(key.name())).reset();
         } else {
             caches.remove(type);
-            similarPromptCache.keySet().removeIf(key -> key.startsWith(type.name().toLowerCase() + ":"));
         }
-        logger.debug("Cache config updated for type: {}", type);
     }
 
     public long getTotalCacheSize() {
@@ -275,13 +238,11 @@ public class CachedLLMProvider implements LLMProvider {
     }
 
     public long getCacheSize(SmartCacheStrategy.RequestType type) {
-        Cache<String, LLMResponse> cache = caches.get(type);
+        Cache<String, CachedEntry> cache = caches.get(type);
         return cache == null ? 0 : cache.estimatedSize();
     }
 
     public void logStatistics() {
-        statistics.forEach((type, stats) -> {
-            logger.debug("{}", stats);
-        });
+        statistics.forEach((type, stats) -> logger.debug("{}", stats));
     }
 }

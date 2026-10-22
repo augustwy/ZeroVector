@@ -17,43 +17,31 @@
 package cn.nexon.zerovector.springboot.autoconfigure;
 
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
-import jakarta.validation.Valid;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @ConfigurationProperties(prefix = "zerovector")
 @Validated
 public class ZeroVectorProperties {
-    
+
     private static final int MIN_SHARD_SIZE = 10;
     private static final int MAX_SHARD_SIZE = 10000;
-    
+
     private boolean enabled = true;
-    
+
     @NotBlank
     private String storageBasePath = "./data/knowledge_bases";
-    
-    public String getStorageBasePath() {
-        return storageBasePath;
-    }
-    
-    public void setStorageBasePath(String storageBasePath) {
-        this.storageBasePath = storageBasePath;
-    }
-    
+
     private boolean useShardedStorage = true;
-    
-    private int shardSize = 100;
-    
+
+    private int shardSize = ConcurrencyProperties.DEFAULT_SHARD_SIZE;
+
     private Model model = new Model("gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini", 0.7, -1);
 
     @Valid
@@ -74,32 +62,39 @@ public class ZeroVectorProperties {
     public boolean isEnabled() {
         return enabled;
     }
-    
+
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
     }
-    
+
+    public String getStorageBasePath() {
+        return storageBasePath;
+    }
+
+    public void setStorageBasePath(String storageBasePath) {
+        this.storageBasePath = storageBasePath;
+    }
+
     public boolean isUseShardedStorage() {
         return useShardedStorage;
     }
-    
+
     public void setUseShardedStorage(boolean useShardedStorage) {
         this.useShardedStorage = useShardedStorage;
     }
-    
+
     public int getShardSize() {
         return shardSize;
     }
-    
+
     public void setShardSize(int shardSize) {
         if (shardSize < MIN_SHARD_SIZE || shardSize > MAX_SHARD_SIZE) {
-            throw new IllegalArgumentException(
-                String.format("shardSize must be between %d and %d, got: %d", 
-                    MIN_SHARD_SIZE, MAX_SHARD_SIZE, shardSize));
+            throw new IllegalArgumentException(String.format(
+                    "shardSize must be between %d and %d, got: %d", MIN_SHARD_SIZE, MAX_SHARD_SIZE, shardSize));
         }
         this.shardSize = shardSize;
     }
-    
+
     public Model getModel() {
         return model;
     }
@@ -149,51 +144,48 @@ public class ZeroVectorProperties {
     }
 
     /**
-     * 模型配置
-     */
-    /**
-     * @param heavy  离线复杂任务：文档理解、聚类、摘要
-     * @param light  离线简单任务：关键词、实体、示例问题提取
-     * @param fast   在线快速任务：导航决策、查询关键词
+     * 模型槽位。
+     *
+     * @param heavy 离线复杂任务：文档理解、聚类、摘要
+     * @param light 离线简单任务：关键词、实体、示例问题提取
+     * @param fast  在线快速任务：导航决策、查询关键词、最终问答
      */
     public record Model(String heavy, String light, String fast, double temperature, int maxTokens) {
     }
 
-    /**
-     * LLM上下文配置
-     */
     public static class LLMContext {
-        private int maxChunkTokens = 4000;
-        private int chunkOverlapTokens = 200;
+        /** 单次送给 LLM 的最大字符数（不是 token 数）。 */
+        private int maxChunkChars = 4000;
 
-        public int getMaxChunkTokens() {
-            return maxChunkTokens;
+        /** 超过该字符数才按章节切片；小文档默认整篇作为一个检索单位。 */
+        private long chapterSplitThresholdChars = 100_000L;
+
+        public int getMaxChunkChars() {
+            return maxChunkChars;
         }
 
-        public void setMaxChunkTokens(int maxChunkTokens) {
-            this.maxChunkTokens = maxChunkTokens;
+        public void setMaxChunkChars(int maxChunkChars) {
+            if (maxChunkChars < 200) {
+                throw new IllegalArgumentException("maxChunkChars must be >= 200");
+            }
+            this.maxChunkChars = maxChunkChars;
         }
 
-        public int getChunkOverlapTokens() {
-            return chunkOverlapTokens;
+        public long getChapterSplitThresholdChars() {
+            return chapterSplitThresholdChars;
         }
 
-        public void setChunkOverlapTokens(int chunkOverlapTokens) {
-            this.chunkOverlapTokens = chunkOverlapTokens;
+        public void setChapterSplitThresholdChars(long chapterSplitThresholdChars) {
+            if (chapterSplitThresholdChars < 1_000) {
+                throw new IllegalArgumentException("chapterSplitThresholdChars must be >= 1000");
+            }
+            this.chapterSplitThresholdChars = chapterSplitThresholdChars;
         }
     }
 
-    /**
-     * 缓存配置
-     */
     public static class Cache {
         private boolean enabled = true;
-        
-        /**
-         * 智能缓存策略配置
-         */
         private SmartCacheStrategyConfig smartCache = new SmartCacheStrategyConfig();
-        
         private CacheConfig comprehendChunk = new CacheConfig(5000L, 4L, TimeUnit.HOURS);
         private CacheConfig generateSummary = new CacheConfig(2000L, 2L, TimeUnit.HOURS);
         private CacheConfig clusterDocuments = new CacheConfig(1000L, 6L, TimeUnit.HOURS);
@@ -208,6 +200,14 @@ public class ZeroVectorProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public SmartCacheStrategyConfig getSmartCache() {
+            return smartCache;
+        }
+
+        public void setSmartCache(SmartCacheStrategyConfig smartCache) {
+            this.smartCache = smartCache;
         }
 
         public CacheConfig getComprehendChunk() {
@@ -265,43 +265,12 @@ public class ZeroVectorProperties {
         public void setDecideNavigation(CacheConfig decideNavigation) {
             this.decideNavigation = decideNavigation;
         }
-
-        public SmartCacheStrategyConfig getSmartCache() {
-            return smartCache;
-        }
-
-        public void setSmartCache(SmartCacheStrategyConfig smartCache) {
-            this.smartCache = smartCache;
-        }
     }
 
-    /**
-     * 智能缓存策略配置
-     */
     public static class SmartCacheStrategyConfig {
-        /**
-         * 相似性阈值，范围0-1
-         */
         private double similarityThreshold = 0.85;
-
-        /**
-         * 最大相似性匹配长度
-         */
         private int maxSimilarityLength = 500;
-
-        /**
-         * 是否启用相似性匹配
-         */
         private boolean enableSimilarityMatching = true;
-
-        public SmartCacheStrategyConfig() {
-        }
-
-        public SmartCacheStrategyConfig(double similarityThreshold, int maxSimilarityLength, boolean enableSimilarityMatching) {
-            this.similarityThreshold = similarityThreshold;
-            this.maxSimilarityLength = maxSimilarityLength;
-            this.enableSimilarityMatching = enableSimilarityMatching;
-        }
 
         public double getSimilarityThreshold() {
             return similarityThreshold;
@@ -328,9 +297,6 @@ public class ZeroVectorProperties {
         }
     }
 
-    /**
-     * 缓存配置项
-     */
     public static class CacheConfig {
         private long maxSize;
         private long expireAfterAccess;
@@ -370,9 +336,6 @@ public class ZeroVectorProperties {
         }
     }
 
-    /**
-     * 钩子配置
-     */
     public static class Hook {
         private boolean enabled = true;
         private List<String> hooks = new ArrayList<>();
@@ -394,9 +357,7 @@ public class ZeroVectorProperties {
         }
     }
 
-    /**
-     * LLM 限流配置（滑动窗口）
-     */
+    /** LLM 全局滑动窗口限流。 */
     public static class RateLimit {
         private boolean enabled = false;
         private int maxRequests = 5;
@@ -415,6 +376,9 @@ public class ZeroVectorProperties {
         }
 
         public void setMaxRequests(int maxRequests) {
+            if (maxRequests < 1) {
+                throw new IllegalArgumentException("maxRequests must be >= 1");
+            }
             this.maxRequests = maxRequests;
         }
 
@@ -423,8 +387,10 @@ public class ZeroVectorProperties {
         }
 
         public void setWindowSeconds(int windowSeconds) {
+            if (windowSeconds < 1) {
+                throw new IllegalArgumentException("windowSeconds must be >= 1");
+            }
             this.windowSeconds = windowSeconds;
         }
     }
-
 }

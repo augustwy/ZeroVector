@@ -17,389 +17,273 @@
 package cn.nexon.zerovector.core.document.comprehend;
 
 import cn.nexon.zerovector.core.ai.LLMProvider;
-import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMPromptTemplates;
+import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.LLMUsageStats;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
 import cn.nexon.zerovector.core.exception.DocumentProcessingException;
-import cn.nexon.zerovector.core.exception.PromptLoadException;
+import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.hook.HookContext;
 import cn.nexon.zerovector.core.hook.HookExecutor;
 import cn.nexon.zerovector.core.hook.HookType;
-import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
 import cn.nexon.zerovector.core.model.Document;
 import cn.nexon.zerovector.core.model.KeywordDefinition;
 import cn.nexon.zerovector.core.util.FileUtils;
-import java.util.Objects;
 import cn.nexon.zerovector.core.util.JsonUtils;
-import cn.nexon.zerovector.core.util.MmapUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.file.Paths;
-import java.util.Map;
-import java.nio.MappedByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Objects;
+import java.util.Set;
 
 /**
- * 文档理解器
- * 负责解析文档内容，使用 LLM 提取摘要、关键词、实体和示例问题
+ * 文档理解器：把正文分块交给 LLM，提取摘要、关键词、实体和示例问题。
+ *
+ * <p>正文只在这里被读取一次；调用方拿到理解结果后把正文写入
+ * {@code ChunkStorage}，语义树仅保存摘要等元数据。
  */
 public class DocumentComprehender {
+
     private static final Logger logger = LoggerFactory.getLogger(DocumentComprehender.class);
+    private static final int DEFAULT_CHUNK_CHARS = 4000;
 
     private final LLMProvider llmProvider;
     private final HookExecutor hookExecutor;
-    private final int maxChunkSize;
-    private static final int MMAP_THRESHOLD = 10 * 1024 * 1024;
+    private final int maxChunkChars;
 
-    public DocumentComprehender(LLMProvider llmProvider, int maxChunkSize) {
-        this(llmProvider, maxChunkSize, new DefaultHookExecutor());
+    public DocumentComprehender(LLMProvider llmProvider, int maxChunkChars) {
+        this(llmProvider, maxChunkChars, new DefaultHookExecutor());
     }
 
-    public DocumentComprehender(LLMProvider llmProvider, int maxChunkSize, HookExecutor hookExecutor) {
-        this.llmProvider = llmProvider;
-        this.maxChunkSize = maxChunkSize;
-        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
+    public DocumentComprehender(LLMProvider llmProvider, int maxChunkChars, HookExecutor hookExecutor) {
+        this.llmProvider = Objects.requireNonNull(llmProvider, "llmProvider");
+        this.maxChunkChars = maxChunkChars > 0 ? maxChunkChars : DEFAULT_CHUNK_CHARS;
+        this.hookExecutor = Objects.requireNonNullElseGet(hookExecutor, DefaultHookExecutor::new);
+    }
+
+    public int getMaxChunkChars() {
+        return maxChunkChars;
     }
 
     /**
-     * 理解文档
-     * 解析文档内容，提取摘要、关键词、实体和示例问题
+     * 理解文档。
      *
-     * @param document 待理解的文档
-     * @return 文档理解结果，包含 LLM 调用统计数据
+     * @param document 文档；内容为空时读取 {@code filePath}（自动检测编码）
+     * @return 理解结果
      */
     public DocumentComprehendResult comprehend(Document document) {
         long startTime = System.currentTimeMillis();
         LLMUsageStats stats = new LLMUsageStats();
-        
-        hookExecutor.executeHooks(HookType.DOCUMENT_COMPREHEND_START,
-            HookContext.builder(HookType.DOCUMENT_COMPREHEND_START)
-                .data("documentId", document.id())
-                .data("documentTitle", document.title())
-        );
-        
+
+        trigger(HookType.DOCUMENT_COMPREHEND_START,
+                HookContext.builder(HookType.DOCUMENT_COMPREHEND_START)
+                        .data("documentId", document.id())
+                        .data("documentTitle", document.title()));
+
         try {
-            DocumentComprehendResult result;
-            if (document.isFileBased()) {
-                result = comprehendFileBased(document, stats);
-            } else {
-                result = comprehendContentBased(document, stats);
-            }
-            
-            long duration = System.currentTimeMillis() - startTime;
-            hookExecutor.executeHooks(HookType.DOCUMENT_COMPREHEND_END,
-                HookContext.builder(HookType.DOCUMENT_COMPREHEND_END)
-                    .data("documentId", document.id())
-                    .data("documentTitle", document.title())
-                    .data("keywordCount", result.keywordDefinitions().size())
-                    .data("llmUsageStats", stats)
-                    .durationMillis(duration)
-            );
-            
+            String content = resolveContent(document);
+            DocumentComprehendResult result = content.isBlank()
+                    ? DocumentComprehendResult.of("", List.of())
+                    : comprehendContent(document, content, stats);
+
+            trigger(HookType.DOCUMENT_COMPREHEND_END,
+                    HookContext.builder(HookType.DOCUMENT_COMPREHEND_END)
+                            .data("documentId", document.id())
+                            .data("documentTitle", document.title())
+                            .data("keywordCount", result.keywordDefinitions().size())
+                            .data("llmUsageStats", stats)
+                            .durationMillis(System.currentTimeMillis() - startTime));
             return result;
-        } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            hookExecutor.executeHooks(HookType.DOCUMENT_COMPREHEND_ERROR,
-                HookContext.builder(HookType.DOCUMENT_COMPREHEND_ERROR)
-                    .data("documentId", document.id())
-                    .data("documentTitle", document.title())
-                    .data("llmUsageStats", stats)
-                    .durationMillis(duration)
-                    .error(e)
-            );
+        } catch (RuntimeException e) {
+            trigger(HookType.DOCUMENT_COMPREHEND_ERROR,
+                    HookContext.builder(HookType.DOCUMENT_COMPREHEND_ERROR)
+                            .data("documentId", document.id())
+                            .data("documentTitle", document.title())
+                            .data("llmUsageStats", stats)
+                            .durationMillis(System.currentTimeMillis() - startTime)
+                            .error(e));
             throw e;
         }
     }
 
-    private DocumentComprehendResult comprehendFileBased(Document document, LLMUsageStats stats) {
-        String filePath = document.filePath();
-        long fileSize = getFileSize(filePath);
-
-        if (fileSize == 0) {
-            logger.warn("文件为空: {}", filePath);
-            return DocumentComprehendResult.of("", List.of());
+    private String resolveContent(Document document) {
+        if (document.content() != null) {
+            return document.content();
         }
-
-        logger.debug("开始理解文档: {}, 大小: {} bytes", document.title(), fileSize);
-
-        if (fileSize < MMAP_THRESHOLD) {
-            DocumentComprehendResult result = comprehendSmallFile(filePath, document, stats);
-            logger.debug("文件文档理解完成");
-            return result;
+        if (document.filePath() == null || document.filePath().isBlank()) {
+            return "";
         }
-
-        DocumentComprehendResult result = comprehendLargeFile(filePath, document, fileSize, stats);
-        logger.debug("大文件文档理解完成");
-        return result;
-    }
-    
-    private long getFileSize(String filePath) {
         try {
-            return FileUtils.getFileSize(filePath);
-        } catch (IOException e) {
-            throw new DocumentProcessingException("unknown", "getFileSize", e);
-        }
-    }
-    
-    private DocumentComprehendResult comprehendSmallFile(String filePath, Document document, LLMUsageStats stats) {
-        String content = readSmallFile(filePath);
-        convertToUtf8(filePath);
-        return processContent(content, document, stats);
-    }
-
-    private void convertToUtf8(String filePath) {
-        try {
-            FileUtils.convertToUtf8(Paths.get(filePath));
-        } catch (IOException e) {
-            logger.warn("文件转 UTF-8 失败: {}", filePath, e);
-        }
-    }
-    
-    private DocumentComprehendResult comprehendLargeFile(String filePath, Document document, long fileSize, LLMUsageStats stats) {
-        List<KeywordDefinition> allKeywordDefinitions = new ArrayList<>();
-        List<String> allEntities = new ArrayList<>();
-        List<String> allQuestions = new ArrayList<>();
-        StringBuilder accumulatedSummary = new StringBuilder();
-
-        Charset charset = detectFileCharset(filePath);
-
-        try (RandomAccessFile raf = new RandomAccessFile(filePath, "r");
-                FileChannel channel = raf.getChannel()) {
-
-            long position = 0;
-            int chunkIndex = 0;
-            int totalChunks = (int) ((fileSize + maxChunkSize - 1) / maxChunkSize);
-
-            while (position < fileSize) {
-                ChunkProcessingResult chunkResult = processFileChunk(channel, position, fileSize, accumulatedSummary, allKeywordDefinitions, allEntities, allQuestions, chunkIndex, totalChunks, stats, charset);
-
-                accumulatedSummary.append(chunkResult.summary()).append(" ");
-                position += chunkResult.chunkSize();
-                chunkIndex++;
-
-                logger.debug("处理文档块 {}/{}", chunkIndex, totalChunks);
-            }
-
-            String finalSummary = generateFinalSummary(document.title(), accumulatedSummary.toString(), stats);
-
-            logger.debug("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
-
-            convertToUtf8(filePath);
-
-            return new DocumentComprehendResult(
-                    finalSummary,
-                    allKeywordDefinitions.stream().distinct().toList(),
-                    allEntities.stream().distinct().toList(),
-                    allQuestions.stream().distinct().toList(),
-                    stats);
+            return FileUtils.readFileToString(Paths.get(document.filePath()));
         } catch (IOException e) {
             throw new DocumentProcessingException(document.id(), "readFile", e);
         }
     }
 
-    private Charset detectFileCharset(String filePath) {
-        try {
-            return FileUtils.detectCharset(Paths.get(filePath));
-        } catch (IOException e) {
-            logger.warn("编码检测失败，回退到 UTF-8: {}", filePath, e);
-            return Charset.forName("UTF-8");
-        }
-    }
-    
-    private ChunkProcessingResult processFileChunk(FileChannel channel, long position, long fileSize,
-            StringBuilder accumulatedSummary, List<KeywordDefinition> allKeywordDefinitions,
-            List<String> allEntities, List<String> allQuestions, int chunkIndex, int totalChunks, LLMUsageStats stats,
-            Charset charset) throws IOException {
-
-        long remaining = fileSize - position;
-        int chunkSize = (int) Math.min(maxChunkSize, remaining);
-        long mapSize = Math.min(chunkSize, Integer.MAX_VALUE);
-
-        MappedByteBuffer buffer = channel.map(
-                FileChannel.MapMode.READ_ONLY,
-                position,
-                mapSize);
-
-        try {
-            String chunk = readMappedBuffer(buffer, charset);
-            
-            ChunkComprehendResult comprehendResult = comprehendChunkWithLLM(
-                chunk, accumulatedSummary.toString(), allKeywordDefinitions, chunkIndex, totalChunks, stats);
-            
-            allKeywordDefinitions.addAll(comprehendResult.keywordDefinitions());
-            allEntities.addAll(comprehendResult.entities());
-            allQuestions.addAll(comprehendResult.questions());
-            
-            return new ChunkProcessingResult(
-                comprehendResult.summary(),
-                chunkSize
-            );
-        } finally {
-            unmapBuffer(buffer);
-        }
-    }
-    
-    private String readMappedBuffer(MappedByteBuffer buffer, Charset charset) {
-        byte[] bytes = new byte[buffer.remaining()];
-        buffer.get(bytes);
-        return new String(bytes, charset);
-    }
-    
-    private ChunkComprehendResult comprehendChunkWithLLM(String chunk, String previousSummary, 
-            List<KeywordDefinition> previousKeywords, int chunkIndex, int totalChunks, LLMUsageStats stats) {
-        
-        String context = buildContext(previousSummary, previousKeywords, chunk);
-        String prompt = buildComprehendPrompt(context, chunkIndex, totalChunks);
-        String fullPrompt = prompt + "\n\n" + chunk;
-
-        LLMResponse response = llmProvider.chat(fullPrompt, SmartCacheStrategy.RequestType.COMPREHEND_CHUNK);
-        stats.add(response);
-        
-        DocumentComprehendResult chunkResult = parseComprehendResponse(response.content());
-        
-        return new ChunkComprehendResult(
-            chunkResult.summary(),
-            chunkResult.keywordDefinitions(),
-            chunkResult.entities(),
-            chunkResult.exampleQuestions()
-        );
-    }
-    
-    private record ChunkComprehendResult(String summary, List<KeywordDefinition> keywordDefinitions, 
-            List<String> entities, List<String> questions) {}
-    
-    private record ChunkProcessingResult(String summary, int chunkSize) {}
-    
-    private String generateFinalSummary(String title, String accumulatedSummary, LLMUsageStats stats) {
-        String summaryPrompt = LLMPromptTemplates.generateSummary(title, accumulatedSummary);
-        LLMResponse response = llmProvider.chat(summaryPrompt, SmartCacheStrategy.RequestType.GENERATE_SUMMARY);
-        stats.add(response);
-        
-        return response.content();
-    }
-
-    private DocumentComprehendResult comprehendContentBased(Document document, LLMUsageStats stats) {
-        String content = document.content();
-        if (content == null || content.isEmpty()) {
-            logger.warn("文档内容为空: {}", document.id());
-            return DocumentComprehendResult.of("", List.of());
-        }
-
-        return processContent(content, document, stats);
-    }
-
-    private DocumentComprehendResult processContent(String content, Document document, LLMUsageStats stats) {
-        logger.debug("开始理解文档: {}, 大小: {} chars", document.title(), content.length());
-
-        List<cn.nexon.zerovector.core.model.KeywordDefinition> allKeywordDefinitions = new ArrayList<>();
-        List<String> allEntities = new ArrayList<>();
-        List<String> allQuestions = new ArrayList<>();
+    private DocumentComprehendResult comprehendContent(Document document, String content, LLMUsageStats stats) {
+        List<KeywordDefinition> allKeywords = new ArrayList<>();
+        Set<String> entities = new LinkedHashSet<>();
+        Set<String> questions = new LinkedHashSet<>();
         StringBuilder accumulatedSummary = new StringBuilder();
 
-        int position = 0;
-        int totalLength = content.length();
-        int chunkIndex = 0;
-        int totalChunks = (totalLength + maxChunkSize - 1) / maxChunkSize;
-
-        while (position < totalLength) {
-            int end = Math.min(position + maxChunkSize, totalLength);
-            String chunk = content.substring(position, end);
-
-            ChunkComprehendResult comprehendResult = comprehendChunkWithLLM(
-                chunk, accumulatedSummary.toString(), allKeywordDefinitions, chunkIndex + 1, totalChunks, stats);
-            
-            allKeywordDefinitions.addAll(comprehendResult.keywordDefinitions());
-            allEntities.addAll(comprehendResult.entities());
-            allQuestions.addAll(comprehendResult.questions());
-
-            if (comprehendResult.summary() != null && !comprehendResult.summary().isEmpty()) {
-                accumulatedSummary.append(comprehendResult.summary()).append(" ");
+        List<String> chunks = split(content);
+        for (int i = 0; i < chunks.size(); i++) {
+            String chunkSummary = comprehendChunk(document, chunks.get(i), accumulatedSummary.toString(),
+                    allKeywords, entities, questions, i + 1, chunks.size(), stats);
+            if (!chunkSummary.isBlank()) {
+                accumulatedSummary.append(chunkSummary).append(' ');
             }
-
-            position = end;
-            chunkIndex++;
-            
-            logger.debug("处理文档块 {}/{}", chunkIndex, totalChunks);
         }
 
-        String finalSummary = generateFinalSummary(document.title(), accumulatedSummary.toString(), stats);
+        String summary = chunks.size() <= 1
+                ? accumulatedSummary.toString().trim()
+                : generateFinalSummary(document.title(), accumulatedSummary.toString(), stats);
 
-        logger.info("文档理解完成: {}, 提取 {} 个关键词", document.title(), allKeywordDefinitions.size());
-
-        return new DocumentComprehendResult(
-                finalSummary,
-                allKeywordDefinitions.stream().distinct().toList(),
-                allEntities.stream().distinct().toList(),
-                allQuestions.stream().distinct().toList(),
+        return new DocumentComprehendResult(summary,
+                distinctKeywords(allKeywords),
+                List.copyOf(entities),
+                List.copyOf(questions),
                 stats);
     }
 
-    private String readSmallFile(String filePath) {
-        try {
-            return FileUtils.readFileToString(filePath);
-        } catch (Exception e) {
-            throw new DocumentProcessingException("unknown", "readSmallFile", e);
+    private List<String> split(String content) {
+        List<String> chunks = new ArrayList<>();
+        int position = 0;
+        while (position < content.length()) {
+            int end = Math.min(position + maxChunkChars, content.length());
+            if (end < content.length()) {
+                // 不要切断代理对
+                if (Character.isHighSurrogate(content.charAt(end - 1))) {
+                    end--;
+                }
+                // 尽量在换行处切分，保留段落完整
+                int newline = content.lastIndexOf('\n', end - 1);
+                if (newline > position + maxChunkChars / 2) {
+                    end = newline + 1;
+                }
+            }
+            if (end <= position) {
+                end = Math.min(position + maxChunkChars, content.length());
+            }
+            chunks.add(content.substring(position, end));
+            position = end;
         }
+        return chunks;
     }
 
-    private void unmapBuffer(MappedByteBuffer buffer) {
-        if (buffer == null) {
-            return;
+    private String comprehendChunk(Document document, String chunk, String previousSummary,
+                                   List<KeywordDefinition> previousKeywords, Set<String> entities,
+                                   Set<String> questions, int index, int total, LLMUsageStats stats) {
+        String context = buildContext(previousSummary, previousKeywords);
+        String prompt = LLMPromptTemplates.comprehendChunk(context, chunk, index, total);
+
+        LLMResponse response = llmProvider.chat(prompt, SmartCacheStrategy.RequestType.COMPREHEND_CHUNK);
+        stats.add(response);
+        requireSuccess(response, document.id(), "comprehendChunk");
+
+        ChunkComprehension parsed = JsonUtils.parseJson(response.content(), ChunkComprehension.class);
+        if (parsed == null) {
+            return "";
         }
-        // 只读映射调用 force() 会抛 ReadOnlyBufferException，此处仅需解除映射
-        MmapUtils.clean(buffer);
+        if (parsed.keywordDefinitions() != null) {
+            for (KeywordDraft draft : parsed.keywordDefinitions()) {
+                if (draft != null && draft.keyword() != null && !draft.keyword().isBlank()) {
+                    previousKeywords.add(KeywordDefinition.of(
+                            draft.keyword(), draft.definition(), draft.context(), document.id()));
+                }
+            }
+        }
+        addNonBlank(entities, parsed.entities());
+        addNonBlank(questions, parsed.exampleQuestions());
+        return parsed.summary() == null ? "" : parsed.summary().trim();
     }
 
-    private String buildContext(String previousSummary, List<KeywordDefinition> previousKeywords, String currentChunk) {
+    private String generateFinalSummary(String title, String accumulatedSummary, LLMUsageStats stats) {
+        String summaryInput = accumulatedSummary.length() > 20_000
+                ? accumulatedSummary.substring(0, 10_000) + " ... "
+                    + accumulatedSummary.substring(accumulatedSummary.length() - 10_000)
+                : accumulatedSummary;
+        String prompt = LLMPromptTemplates.generateSummary(title, summaryInput);
+        LLMResponse response = llmProvider.chat(prompt, SmartCacheStrategy.RequestType.GENERATE_SUMMARY);
+        stats.add(response);
+        if (response == null || !response.success() || response.content() == null || response.content().isBlank()) {
+            logger.warn("最终摘要生成失败，回退到分块摘要: {}",
+                    response == null ? "null response" : response.errorMessage());
+            return accumulatedSummary.trim();
+        }
+        return response.content().trim();
+    }
+
+    private String buildContext(String previousSummary, List<KeywordDefinition> previousKeywords) {
         StringBuilder context = new StringBuilder();
-
-        if (previousSummary != null && !previousSummary.isEmpty()) {
-            context.append("前文摘要：").append(previousSummary).append("\n\n");
+        if (previousSummary != null && !previousSummary.isBlank()) {
+            // 只带最近一段摘要，避免长文档把上下文越滚越大
+            String rolling = previousSummary.length() > 1000
+                    ? previousSummary.substring(previousSummary.length() - 1000)
+                    : previousSummary;
+            context.append("前文摘要：").append(rolling).append("\n\n");
         }
-
         if (!previousKeywords.isEmpty()) {
             String joined = previousKeywords.stream()
-                .limit(5)
-                .map(kd -> kd.keyword() + "（" + kd.definition() + "）")
-                .collect(Collectors.joining("、"));
-            context.append("前文关键词：").append(joined).append("\n\n");
+                    .limit(5)
+                    .map(keyword -> keyword.keyword() + "（" + keyword.definition() + "）")
+                    .collect(java.util.stream.Collectors.joining("、"));
+            context.append("前文关键词：").append(joined);
         }
-
-        context.append("当前内容：").append(currentChunk);
-
         return context.toString();
     }
 
-    private String buildComprehendPrompt(String context, int chunkIndex, int totalChunks) {
-        return LLMPromptTemplates.comprehendChunk(context, chunkIndex, totalChunks);
+    private static void addNonBlank(Set<String> target, List<String> values) {
+        if (values == null) {
+            return;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                target.add(value.trim());
+            }
+        }
     }
 
-    private DocumentComprehendResult parseComprehendResponse(String jsonContent) {
-        Map<String, Object> resultMap = JsonUtils.parseToMap(jsonContent);
-        String summary = (String) resultMap.get("summary");
-
-        List<Map<String, String>> keywordDataList = (List<Map<String, String>>) resultMap
-                .getOrDefault("keywordDefinitions", List.of());
-        List<String> entities = (List<String>) resultMap.getOrDefault("entities", List.of());
-        List<String> questions = (List<String>) resultMap.getOrDefault("exampleQuestions", List.of());
-
-        List<cn.nexon.zerovector.core.model.KeywordDefinition> keywordDefinitions = new ArrayList<>();
-        for (Map<String, String> keywordData : keywordDataList) {
-            String keyword = keywordData.get("keyword");
-            String definition = keywordData.get("definition");
-            String context = keywordData.get("context");
-            keywordDefinitions.add(cn.nexon.zerovector.core.model.KeywordDefinition.of(keyword, definition, context,
-                    "doc_" + System.currentTimeMillis()));
+    private List<KeywordDefinition> distinctKeywords(List<KeywordDefinition> keywords) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<KeywordDefinition> result = new ArrayList<>();
+        for (KeywordDefinition keyword : keywords) {
+            if (seen.add(keyword.normalizedKeyword())) {
+                result.add(keyword);
+            }
         }
+        return result;
+    }
 
-        return new DocumentComprehendResult(summary, keywordDefinitions, entities, questions, new LLMUsageStats());
+    private void requireSuccess(LLMResponse response, String documentId, String operation) {
+        if (response == null || !response.success()) {
+            String message = response == null ? "null response" : response.errorMessage();
+            throw new DocumentProcessingException(documentId, operation, "LLM call failed: " + message);
+        }
+    }
+
+    private void trigger(HookType type, HookContext.Builder builder) {
+        try {
+            hookExecutor.executeHooks(type, builder);
+        } catch (RuntimeException e) {
+            logger.warn("Hook 执行失败: {}", type, e);
+        }
+    }
+
+    /** LLM 返回的 JSON 结构。 */
+    private record ChunkComprehension(
+            String summary,
+            List<KeywordDraft> keywordDefinitions,
+            List<String> entities,
+            List<String> exampleQuestions
+    ) {
+    }
+
+    private record KeywordDraft(String keyword, String definition, String context) {
     }
 }

@@ -23,7 +23,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,37 +32,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * 创建带限流的虚拟线程执行器，用于并行化 LLM 调用。
+ * 带并发度限制的虚拟线程执行器，用于并行化构建阶段的 LLM 调用。
+ *
+ * <p>只限制并发度，不再做速率限制——全局 RPS 由
+ * {@code RateLimitedLLMProvider} 统一负责，避免两套节拍互相叠加。
  */
 public final class LLMExecutors {
 
     private LLMExecutors() {
     }
 
-    /**
-     * 按 rps 值全局共享的限流器。
-     * <p>每个管理器/构建器都会创建自己的执行器，若各持有限流器，
-     * 聚合请求速率会成倍放大；共享后全 JVM 对同一 rps 配置共用一个节拍。
-     * <p>Semaphore（并发度）仍按执行器实例隔离，不在此列。
-     */
-    private static final ConcurrentHashMap<Double, RateLimiter> SHARED_RATE_LIMITERS = new ConcurrentHashMap<>();
-
-    /**
-     * 根据并发配置创建执行器。
-     *
-     * @param props 并发配置（maxConcurrentRequests 控制 Semaphore，requestsPerSecond 控制速率）
-     * @return 带限流的虚拟线程执行器
-     */
     public static ExecutorService create(ConcurrencyProperties props) {
-        int maxConcurrent = props.getMaxConcurrentRequests();
-        double rps = props.getRequestsPerSecond();
-
+        int maxConcurrent = Math.max(1, props.getMaxConcurrentRequests());
         Semaphore semaphore = new Semaphore(maxConcurrent);
-        // rps <= 0 视为不限速（否则除零会产生无限等待间隔）；
-        // RateLimiter 按 rps 全局共享：多个执行器各自建实例时聚合速率会成倍放大
-        RateLimiter rateLimiter = rps > 0
-            ? SHARED_RATE_LIMITERS.computeIfAbsent(rps, RateLimiter::new)
-            : null;
         ExecutorService delegate = Executors.newVirtualThreadPerTaskExecutor();
 
         return new ExecutorService() {
@@ -93,13 +74,12 @@ public final class LLMExecutors {
 
             @Override
             public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) {
-                // ExecutorService 契约要求阻塞等待全部完成，复用带超时版本（无限等待）
                 return invokeAll(tasks, Long.MAX_VALUE, TimeUnit.NANOSECONDS);
             }
 
             @Override
             public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks,
-                                                  long timeout, TimeUnit unit) {
+                                                 long timeout, TimeUnit unit) {
                 long deadline = System.nanoTime() + unit.toNanos(timeout);
                 List<Future<T>> futures = new ArrayList<>(tasks.size());
                 for (Callable<T> task : tasks) {
@@ -169,9 +149,6 @@ public final class LLMExecutors {
             private void runWithLimit(Runnable command) {
                 semaphore.acquireUninterruptibly();
                 try {
-                    if (rateLimiter != null) {
-                        rateLimiter.acquire();
-                    }
                     command.run();
                 } finally {
                     semaphore.release();
@@ -181,43 +158,11 @@ public final class LLMExecutors {
             private <T> T runWithLimit(Callable<T> task) throws Exception {
                 semaphore.acquireUninterruptibly();
                 try {
-                    if (rateLimiter != null) {
-                        rateLimiter.acquire();
-                    }
                     return task.call();
                 } finally {
                     semaphore.release();
                 }
             }
         };
-    }
-
-    /**
-     * 简易令牌桶速率限制器。
-     */
-    private static class RateLimiter {
-
-        private final double intervalNanos;
-
-        private long lastAcquireNanos;
-
-        RateLimiter(double permitsPerSecond) {
-            this.intervalNanos = (long) (1_000_000_000.0 / permitsPerSecond);
-            this.lastAcquireNanos = System.nanoTime() - (long) intervalNanos;
-        }
-
-        synchronized void acquire() {
-            long now = System.nanoTime();
-            long elapsed = now - lastAcquireNanos;
-            long waitNanos = (long) intervalNanos - elapsed;
-            if (waitNanos > 0) {
-                try {
-                    Thread.sleep(waitNanos / 1_000_000, (int) (waitNanos % 1_000_000));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            lastAcquireNanos = System.nanoTime();
-        }
     }
 }

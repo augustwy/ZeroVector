@@ -19,399 +19,399 @@ package cn.nexon.zerovector.core.storage;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.SemanticTree;
 import cn.nexon.zerovector.core.model.TreeNode;
-import com.fasterxml.jackson.core.JsonProcessingException;
+import cn.nexon.zerovector.core.util.JsonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Collections;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Stream;
 
 /**
- * 分片语义树存储引擎
- * 将大型语义树拆分为多个文件存储，提高加载和查询性能
+ * 分片语义树存储引擎。
+ *
+ * <p>每次保存写入一个全新的 generation（文件名带 generation 后缀），最后原子替换
+ * {@code metadata.json} 作为提交点。旧 generation 的文件在提交成功后才会删除：
+ * 因此中途崩溃时旧 metadata 仍指向完整的旧数据集，不会出现“部分文件已覆盖、
+ * 部分仍是旧数据”的损坏状态。
+ *
+ * <p>读取路径持有读锁，提交只持有短暂的写锁；完整写文件过程不阻塞查询。
  */
 public class ShardedTreeStorage implements AutoCloseable {
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final Logger logger = LoggerFactory.getLogger(ShardedTreeStorage.class);
     private static final String METADATA_FILE = "metadata.json";
     private static final String NODE_PREFIX = "node_";
     private static final String CHUNK_PREFIX = "chunk_";
+    private static final String ROOT_PREFIX = "root_";
+    private static final String ROOT_FILE = "root.json";
     private static final int DEFAULT_SHARD_SIZE = 100;
     private static final int MAX_NODE_CACHE_SIZE = 1000;
     private static final int MAX_CHUNK_CACHE_SIZE = 5000;
     private static final long CACHE_EXPIRE_AFTER_ACCESS_MINUTES = 30;
-    private static final Logger logger = LoggerFactory.getLogger(ShardedTreeStorage.class);
-    
-    private final String storageDir;
+
+    private static final TypeReference<Map<String, TreeNode>> NODE_MAP_TYPE = new TypeReference<>() {
+    };
+    private static final TypeReference<Map<String, DocumentChunk>> CHUNK_MAP_TYPE = new TypeReference<>() {
+    };
+
+    private final Path storageDir;
     private final int shardSize;
-    
-    private TreeNode rootNode;
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+
     private final Cache<String, TreeNode> nodeCache;
     private final Cache<String, DocumentChunk> chunkCache;
-    
-    // 分片索引
-    private final Map<String, String> nodeShards = new ConcurrentHashMap<>();
-    private final Map<String, String> chunkShards = new ConcurrentHashMap<>();
-    
+
+    /** 当前已提交的索引快照，始终整体替换，读路径无需加锁遍历。 */
+    private volatile Map<String, String> nodeShards = Map.of();
+    private volatile Map<String, String> chunkShards = Map.of();
+    private volatile String rootFile = ROOT_FILE;
+    private volatile String generation;
+    private volatile TreeNode rootNode;
+
     public ShardedTreeStorage(String storageDir) {
         this(storageDir, DEFAULT_SHARD_SIZE);
     }
-    
+
     public ShardedTreeStorage(String storageDir, int shardSize) {
-        this.storageDir = storageDir;
+        if (shardSize <= 0) {
+            throw new IllegalArgumentException("shardSize must be > 0, got: " + shardSize);
+        }
+        this.storageDir = Paths.get(storageDir);
         this.shardSize = shardSize;
-        
+
         this.nodeCache = Caffeine.newBuilder()
-            .maximumSize(MAX_NODE_CACHE_SIZE)
-            .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
-            .build();
-        
+                .maximumSize(MAX_NODE_CACHE_SIZE)
+                .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS_MINUTES, TimeUnit.MINUTES)
+                .build();
         this.chunkCache = Caffeine.newBuilder()
-            .maximumSize(MAX_CHUNK_CACHE_SIZE)
-            .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
-            .build();
-        
+                .maximumSize(MAX_CHUNK_CACHE_SIZE)
+                .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS_MINUTES, TimeUnit.MINUTES)
+                .build();
+
         try {
-            Files.createDirectories(Paths.get(storageDir));
+            Files.createDirectories(this.storageDir);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to create storage directory", e);
+            throw new IllegalStateException("Failed to create storage directory: " + storageDir, e);
         }
     }
-    
-    /**
-     * 保存语义树到分片文件
-     */
-    public void saveTree(SemanticTree tree) throws IOException {
-        synchronized (this) {
-            // [CRITICAL] 必须先物化节点和分片为普通 HashMap，再清空索引。
-            // LazyNodeMap/LazyChunkMap 依赖 nodeShards/chunkShards 做懒加载，
-            // 如果先 clear 再遍历，懒加载返回空，导致数据丢失。
-            Map<String, TreeNode> nodes = new HashMap<>(tree.nodes());
-            Map<String, DocumentChunk> chunks = new HashMap<>(tree.chunks());
 
-            // 保存旧引用用于后续清理孤立文件
-            Set<String> oldNodeShardFiles = new HashSet<>(nodeShards.values());
-            Set<String> oldChunkShardFiles = new HashSet<>(chunkShards.values());
-
-            // 清空现有索引
-            nodeShards.clear();
-            chunkShards.clear();
-
-            // 写入顺序：数据分片 → 根节点 → 元数据（最后）。
-            // metadata 是加载入口，作为提交点：中途崩溃时旧 metadata 仍指向完整旧数据
-
-            // 分片保存节点和文档块
-            saveNodesInShards(nodes);
-            saveChunksInShards(chunks);
-
-            // 保存根节点
-            if (tree.rootNode() != null) {
-                saveRootNode(tree.rootNode());
-            }
-
-            // 保存元数据（原子替换）
-            saveMetadata();
-
-            // 清理不再引用的孤立 shard 文件
-            Set<String> newNodeShardFiles = new HashSet<>(nodeShards.values());
-            Set<String> newChunkShardFiles = new HashSet<>(chunkShards.values());
-
-            for (String oldFile : oldNodeShardFiles) {
-                if (!newNodeShardFiles.contains(oldFile)) {
-                    deleteShardFile(oldFile);
-                }
-            }
-            for (String oldFile : oldChunkShardFiles) {
-                if (!newChunkShardFiles.contains(oldFile)) {
-                    deleteShardFile(oldFile);
-                }
-            }
-        }
-    }
-    
-    /**
-     * 从分片文件加载语义树
-     */
-    public SemanticTree loadTree() throws IOException {
-        if (!loadMetadata()) {
-            return null;
-        }
-        
-        loadRootNode();
-        
-        return new SemanticTree(rootNode, new LazyNodeMap(this), new LazyChunkMap(this));
-    }
-    
-    /**
-     * 获取节点（支持懒加载）
-     * <p>先检查缓存，未命中则整片加载；即使加载后瞬间被驱逐，
-     * 也直接从刚加载的分片数据兜底返回，不会误报节点不存在
-     */
-    public TreeNode getNode(String nodeId) throws IOException {
-        String shardFile = nodeShards.get(nodeId);
-        if (shardFile == null) {
-            return null;
-        }
-        
-        TreeNode cached = nodeCache.getIfPresent(nodeId);
-        if (cached != null) {
-            return cached;
-        }
-        
-        try {
-            Map<String, TreeNode> shard = loadNodeShard(shardFile);
-            TreeNode node = nodeCache.getIfPresent(nodeId);
-            return node != null ? node : shard.get(nodeId);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to load node: " + nodeId, e);
-        }
-    }
-    
-    /**
-     * 获取文档块（支持懒加载）
-     * <p>兜底逻辑同 {@link #getNode}
-     */
-    public DocumentChunk getChunk(String chunkId) throws IOException {
-        String shardFile = chunkShards.get(chunkId);
-        if (shardFile == null) {
-            return null;
-        }
-        
-        DocumentChunk cached = chunkCache.getIfPresent(chunkId);
-        if (cached != null) {
-            return cached;
-        }
-        
-        try {
-            Map<String, DocumentChunk> shard = loadChunkShard(shardFile);
-            DocumentChunk chunk = chunkCache.getIfPresent(chunkId);
-            return chunk != null ? chunk : shard.get(chunkId);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to load chunk: " + chunkId, e);
-        }
-    }
-    
-    /**
-     * 保存根节点
-     */
-    private void saveRootNode(TreeNode rootNode) throws IOException {
-        Path filePath = Paths.get(storageDir, "root.json");
-        String json = objectMapper.writeValueAsString(rootNode);
-        Files.writeString(filePath, json);
-    }
-    
-    /**
-     * 加载根节点
-     */
-    private void loadRootNode() throws IOException {
-        Path filePath = Paths.get(storageDir, "root.json");
-        if (!Files.exists(filePath)) {
+    /** 保存语义树。并发调用会串行化；查询只在提交阶段短暂阻塞。 */
+    public synchronized void saveTree(SemanticTree tree) throws IOException {
+        if (tree == null) {
             return;
         }
-        
-        String json = Files.readString(filePath);
-        this.rootNode = objectMapper.readValue(json, TreeNode.class);
+
+        Map<String, TreeNode> nodes = new HashMap<>(tree.nodes());
+        Map<String, DocumentChunk> chunks = new HashMap<>(tree.chunks());
+
+        String newGeneration = UUID.randomUUID().toString().replace("-", "");
+        Map<String, String> newNodeShards = saveNodes(nodes, newGeneration);
+        Map<String, String> newChunkShards = saveChunks(chunks, newGeneration);
+        String newRootFile = saveRoot(tree.rootNode(), newGeneration);
+
+        writeMetadata(new Metadata(newGeneration, newRootFile, newNodeShards, newChunkShards));
+
+        Map<String, String> oldNodeShards;
+        Map<String, String> oldChunkShards;
+        String oldRootFile;
+        lock.writeLock().lock();
+        try {
+            oldNodeShards = nodeShards;
+            oldChunkShards = chunkShards;
+            oldRootFile = rootFile;
+
+            nodeShards = Map.copyOf(newNodeShards);
+            chunkShards = Map.copyOf(newChunkShards);
+            rootFile = newRootFile;
+            generation = newGeneration;
+            rootNode = tree.rootNode();
+        } finally {
+            lock.writeLock().unlock();
+        }
+
+        deleteGeneration(oldNodeShards.values(), oldChunkShards.values(), oldRootFile, newGeneration);
+        logger.debug("语义树已保存, generation={}, nodes={}, chunks={}", newGeneration,
+                newNodeShards.size(), newChunkShards.size());
     }
-    
+
+    public SemanticTree loadTree() throws IOException {
+        if (!loadMetadata()) {
+            cleanupOrphans(null);
+            return null;
+        }
+        loadRootNode();
+        cleanupOrphans(generation);
+        return new SemanticTree(rootNode, new LazyNodeMap(this), new LazyChunkMap(this));
+    }
+
     /**
-     * 分片保存节点
+     * 获取节点（懒加载）。
+     * <p>读锁覆盖“索引定位 + 文件读取”全过程，确保保存方在删除旧 generation 前
+     * 不会与正在读取旧文件的查询并发。
      */
-    private void saveNodesInShards(Map<String, TreeNode> nodes) throws IOException {
-        int shardIndex = 0;
-        int countInCurrentShard = 0;
-        Map<String, TreeNode> currentShard = new HashMap<>();
-        
-        for (Map.Entry<String, TreeNode> entry : nodes.entrySet()) {
-            currentShard.put(entry.getKey(), entry.getValue());
-            nodeShards.put(entry.getKey(), NODE_PREFIX + shardIndex + ".json");
-            countInCurrentShard++;
-            
-            // 达到分片大小，保存当前分片
-            if (countInCurrentShard >= shardSize) {
-                saveNodeShard(NODE_PREFIX + shardIndex + ".json", currentShard);
-                currentShard.clear();
-                shardIndex++;
-                countInCurrentShard = 0;
+    public TreeNode getNode(String nodeId) throws IOException {
+        if (nodeId == null) {
+            return null;
+        }
+        lock.readLock().lock();
+        try {
+            String shardFile = nodeShards.get(nodeId);
+            if (shardFile == null) {
+                return null;
+            }
+            TreeNode cached = nodeCache.getIfPresent(nodeId);
+            if (cached != null) {
+                return cached;
+            }
+            Map<String, TreeNode> shard = loadNodeShard(shardFile);
+            return shard.get(nodeId);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    public DocumentChunk getChunk(String chunkId) throws IOException {
+        if (chunkId == null) {
+            return null;
+        }
+        lock.readLock().lock();
+        try {
+            String shardFile = chunkShards.get(chunkId);
+            if (shardFile == null) {
+                return null;
+            }
+            DocumentChunk cached = chunkCache.getIfPresent(chunkId);
+            if (cached != null) {
+                return cached;
+            }
+            Map<String, DocumentChunk> shard = loadChunkShard(shardFile);
+            return shard.get(chunkId);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    private String saveRoot(TreeNode root, String gen) throws IOException {
+        if (root == null) {
+            return null;
+        }
+        String fileName = ROOT_PREFIX + gen + ".json";
+        Files.writeString(storageDir.resolve(fileName), JsonUtils.toJson(root));
+        return fileName;
+    }
+
+    private void loadRootNode() throws IOException {
+        if (rootFile == null) {
+            rootNode = null;
+            return;
+        }
+        Path filePath = storageDir.resolve(rootFile);
+        if (!Files.exists(filePath)) {
+            throw new IOException("Missing root node file: " + filePath);
+        }
+        rootNode = JsonUtils.parseJson(Files.readString(filePath), TreeNode.class);
+    }
+
+    private Map<String, String> saveNodes(Map<String, TreeNode> nodes, String gen) throws IOException {
+        Map<String, String> shardIndex = new HashMap<>();
+        List<Map<String, TreeNode>> shards = partition(nodes);
+        for (int i = 0; i < shards.size(); i++) {
+            String fileName = NODE_PREFIX + gen + "_" + i + ".json";
+            Files.writeString(storageDir.resolve(fileName), JsonUtils.toJson(shards.get(i)));
+            for (String nodeId : shards.get(i).keySet()) {
+                shardIndex.put(nodeId, fileName);
             }
         }
-        
-        // 保存最后一个分片
-        if (!currentShard.isEmpty()) {
-            saveNodeShard(NODE_PREFIX + shardIndex + ".json", currentShard);
-        }
+        return shardIndex;
     }
-    
-    /**
-     * 分片保存文档块
-     */
-    private void saveChunksInShards(Map<String, DocumentChunk> chunks) throws IOException {
-        int shardIndex = 0;
-        int countInCurrentShard = 0;
-        Map<String, DocumentChunk> currentShard = new HashMap<>();
-        
-        for (Map.Entry<String, DocumentChunk> entry : chunks.entrySet()) {
-            DocumentChunk chunk = entry.getValue();
-            // 如果是基于文件路径的文档块，创建一个新的DocumentChunk，其中content为null
-            if (chunk.isFilePathBased()) {
-                chunk = new DocumentChunk(
-                    chunk.id(),
-                    null,  // 基于文件路径的文档块不保存content
-                    chunk.summary(),
-                    chunk.filePath(),
-                    chunk.md5(),
-                    chunk.metadata()
-                );
-            }
-            
-            currentShard.put(entry.getKey(), chunk);
-            chunkShards.put(entry.getKey(), CHUNK_PREFIX + shardIndex + ".json");
-            countInCurrentShard++;
-            
-            // 达到分片大小，保存当前分片
-            if (countInCurrentShard >= shardSize) {
-                saveChunkShard(CHUNK_PREFIX + shardIndex + ".json", currentShard);
-                currentShard.clear();
-                shardIndex++;
-                countInCurrentShard = 0;
+
+    private Map<String, String> saveChunks(Map<String, DocumentChunk> chunks, String gen) throws IOException {
+        Map<String, String> shardIndex = new HashMap<>();
+        Map<String, DocumentChunk> metadataOnly = new HashMap<>(chunks.size());
+        chunks.forEach((id, chunk) -> metadataOnly.put(id, chunk.metadataOnly()));
+
+        List<Map<String, DocumentChunk>> shards = partition(metadataOnly);
+        for (int i = 0; i < shards.size(); i++) {
+            String fileName = CHUNK_PREFIX + gen + "_" + i + ".json";
+            Files.writeString(storageDir.resolve(fileName), JsonUtils.toJson(shards.get(i)));
+            for (String chunkId : shards.get(i).keySet()) {
+                shardIndex.put(chunkId, fileName);
             }
         }
-        
-        // 保存最后一个分片
-        if (!currentShard.isEmpty()) {
-            saveChunkShard(CHUNK_PREFIX + shardIndex + ".json", currentShard);
+        return shardIndex;
+    }
+
+    private <T> List<Map<String, T>> partition(Map<String, T> values) {
+        List<Map<String, T>> shards = new ArrayList<>();
+        Map<String, T> current = new HashMap<>();
+        for (Map.Entry<String, T> entry : values.entrySet()) {
+            current.put(entry.getKey(), entry.getValue());
+            if (current.size() >= shardSize) {
+                shards.add(current);
+                current = new HashMap<>();
+            }
         }
+        if (!current.isEmpty()) {
+            shards.add(current);
+        }
+        return shards;
     }
-    
-    /**
-     * 保存节点分片
-     */
-    private void saveNodeShard(String fileName, Map<String, TreeNode> nodes) throws IOException {
-        Path filePath = Paths.get(storageDir, fileName);
-        String json = objectMapper.writeValueAsString(nodes);
-        Files.writeString(filePath, json);
-    }
-    
-    /**
-     * 保存文档块分片
-     */
-    private void saveChunkShard(String fileName, Map<String, DocumentChunk> chunks) throws IOException {
-        Path filePath = Paths.get(storageDir, fileName);
-        String json = objectMapper.writeValueAsString(chunks);
-        Files.writeString(filePath, json);
-    }
-    
-    /**
-     * 加载节点分片，返回分片内容（同时写入缓存）
-     */
+
     private Map<String, TreeNode> loadNodeShard(String fileName) throws IOException {
-        Path filePath = Paths.get(storageDir, fileName);
+        Path filePath = storageDir.resolve(fileName);
         if (!Files.exists(filePath)) {
             return Map.of();
         }
-        
-        String json = Files.readString(filePath);
-        Map<String, TreeNode> nodes = objectMapper.readValue(json, new TypeReference<Map<String, TreeNode>>() {});
-        
+        Map<String, TreeNode> nodes = JsonUtils.parseJson(Files.readString(filePath), NODE_MAP_TYPE);
+        if (nodes == null) {
+            return Map.of();
+        }
         nodeCache.putAll(nodes);
         return nodes;
     }
-    
-    /**
-     * 加载文档块分片，返回分片内容（同时写入缓存）
-     */
+
     private Map<String, DocumentChunk> loadChunkShard(String fileName) throws IOException {
-        Path filePath = Paths.get(storageDir, fileName);
+        Path filePath = storageDir.resolve(fileName);
         if (!Files.exists(filePath)) {
             return Map.of();
         }
-        
-        String json = Files.readString(filePath);
-        Map<String, DocumentChunk> chunks = objectMapper.readValue(json, new TypeReference<Map<String, DocumentChunk>>() {});
-        
+        Map<String, DocumentChunk> chunks = JsonUtils.parseJson(Files.readString(filePath), CHUNK_MAP_TYPE);
+        if (chunks == null) {
+            return Map.of();
+        }
         chunkCache.putAll(chunks);
         return chunks;
     }
-    
-    /**
-     * 保存元数据
-     * <p>元数据是加载入口（commit marker），必须最后写入且原子替换：
-     * 先写临时文件再 move，崩溃时旧 metadata 仍指向一致的数据集
-     */
-    private void saveMetadata() throws IOException {
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("nodeShards", nodeShards);
-        metadata.put("chunkShards", chunkShards);
-        metadata.put("shardSize", shardSize);
-        
-        String json = objectMapper.writeValueAsString(metadata);
-        Path filePath = Paths.get(storageDir, METADATA_FILE);
-        Path tempPath = Paths.get(storageDir, METADATA_FILE + ".tmp");
-        Files.writeString(tempPath, json);
-        Files.move(tempPath, filePath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+    private record Metadata(String generation, String rootFile,
+                            Map<String, String> nodeShards, Map<String, String> chunkShards) {
     }
-    
-    /**
-     * 加载元数据
-     */
+
+    private void writeMetadata(Metadata metadata) throws IOException {
+        Path tempPath = storageDir.resolve(METADATA_FILE + ".tmp");
+        Files.writeString(tempPath, JsonUtils.toJson(metadata));
+        atomicMove(tempPath, storageDir.resolve(METADATA_FILE));
+    }
+
     private boolean loadMetadata() throws IOException {
-        Path filePath = Paths.get(storageDir, METADATA_FILE);
+        Path filePath = storageDir.resolve(METADATA_FILE);
         if (!Files.exists(filePath)) {
             return false;
         }
-        
-        String json = Files.readString(filePath);
-        Map<String, Object> metadata = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
-        
-        @SuppressWarnings("unchecked")
-        Map<String, String> nodeShardMap = (Map<String, String>) metadata.get("nodeShards");
-        if (nodeShardMap != null) {
-            nodeShards.putAll(nodeShardMap);
+        Metadata metadata;
+        try {
+            metadata = JsonUtils.parseJson(Files.readString(filePath), Metadata.class);
+        } catch (RuntimeException e) {
+            throw new IOException("Corrupt tree metadata: " + filePath, e);
         }
-        
-        @SuppressWarnings("unchecked")
-        Map<String, String> chunkShardMap = (Map<String, String>) metadata.get("chunkShards");
-        if (chunkShardMap != null) {
-            chunkShards.putAll(chunkShardMap);
+        if (metadata == null || metadata.generation() == null
+                || metadata.nodeShards() == null || metadata.chunkShards() == null) {
+            throw new IOException("Incomplete tree metadata: " + filePath);
         }
-        
+        nodeShards = Map.copyOf(metadata.nodeShards());
+        chunkShards = Map.copyOf(metadata.chunkShards());
+        rootFile = metadata.rootFile();
+        generation = metadata.generation();
         return true;
     }
-    
-    /**
-     * 删除分片文件
-     */
-    private void deleteShardFile(String fileName) {
+
+    private void cleanupOrphans(String currentGeneration) {
+        Set<String> keep = new HashSet<>();
+        keep.add(METADATA_FILE);
+        if (rootFile != null) {
+            keep.add(rootFile);
+        }
+        keep.addAll(nodeShards.values());
+        keep.addAll(chunkShards.values());
+
         try {
-            Path filePath = Paths.get(storageDir, fileName);
-            Files.deleteIfExists(filePath);
+            Files.deleteIfExists(storageDir.resolve(METADATA_FILE + ".tmp"));
         } catch (IOException e) {
-            logger.warn("清理孤立分片文件失败: {}", fileName, e);
+            logger.warn("清理临时元数据失败: {}", storageDir, e);
+        }
+
+        try (Stream<Path> files = Files.list(storageDir)) {
+            files.filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .filter(this::isGenerationFile)
+                    .filter(name -> !keep.contains(name))
+                    .forEach(this::deleteFile);
+        } catch (IOException e) {
+            logger.warn("清理孤立分片文件失败: {}", storageDir, e);
+        }
+    }
+
+    private boolean isGenerationFile(String fileName) {
+        if (fileName.equals(METADATA_FILE) || fileName.equals(METADATA_FILE + ".tmp")
+                || fileName.equals(ROOT_FILE)) {
+            return false;
+        }
+        return fileName.startsWith(NODE_PREFIX)
+                || fileName.startsWith(CHUNK_PREFIX)
+                || fileName.startsWith(ROOT_PREFIX);
+    }
+
+    private void deleteGeneration(Iterable<String> oldNodeFiles, Iterable<String> oldChunkFiles,
+                                  String oldRootFile, String newGeneration) {
+        Set<String> toDelete = new HashSet<>();
+        oldNodeFiles.forEach(toDelete::add);
+        oldChunkFiles.forEach(toDelete::add);
+        if (oldRootFile != null) {
+            toDelete.add(oldRootFile);
+        }
+        // 新 generation 的文件绝不能被删除（root 文件名可能与旧值相同）
+        if (rootFile != null) {
+            toDelete.remove(rootFile);
+        }
+        toDelete.removeIf(name -> name.contains(newGeneration));
+        toDelete.forEach(this::deleteFile);
+    }
+
+    private void deleteFile(String fileName) {
+        try {
+            Files.deleteIfExists(storageDir.resolve(fileName));
+        } catch (IOException e) {
+            logger.warn("删除分片文件失败: {}", fileName, e);
+        }
+    }
+
+    private static void atomicMove(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
         nodeCache.invalidateAll();
         chunkCache.invalidateAll();
     }
-    
+
     public Map<String, String> getNodeShardIndex() {
-        return Collections.unmodifiableMap(nodeShards);
+        return nodeShards;
     }
-    
+
     public Map<String, String> getChunkShardIndex() {
-        return Collections.unmodifiableMap(chunkShards);
+        return chunkShards;
     }
 }

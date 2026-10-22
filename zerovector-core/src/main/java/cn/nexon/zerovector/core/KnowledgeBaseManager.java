@@ -20,8 +20,8 @@ import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.config.ConcurrencyProperties;
 import cn.nexon.zerovector.core.document.comprehend.DocumentComprehender;
 import cn.nexon.zerovector.core.exception.StorageException;
-import cn.nexon.zerovector.core.hook.HookExecutor;
 import cn.nexon.zerovector.core.hook.DefaultHookExecutor;
+import cn.nexon.zerovector.core.hook.HookExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,16 +29,27 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Objects;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
-public class KnowledgeBaseManager {
+/**
+ * 多知识库管理器。
+ *
+ * <p>每个知识库独占一个目录，懒加载；创建/删除/切换对并发调用安全。
+ */
+public final class KnowledgeBaseManager implements AutoCloseable {
+
     private static final Logger logger = LoggerFactory.getLogger(KnowledgeBaseManager.class);
     private static final String DEFAULT_KNOWLEDGE_BASE = "default";
     private static final String NAME_PATTERN = "^[a-zA-Z0-9_-]+$";
+    private static final String TREE_FILE = "semantic-tree.json";
+    private static final String TREE_DIR = "semantic-tree.d";
+    private static final String MARKER_FILE = ".zerovector-kb";
 
     private final Map<String, SemanticTreeManager> managers = new ConcurrentHashMap<>();
     private final LLMProvider llmProvider;
@@ -46,44 +57,51 @@ public class KnowledgeBaseManager {
     private final ConcurrencyProperties concurrencyProperties;
     private final HookExecutor hookExecutor;
     private final Path baseStoragePath;
-    private String currentKnowledgeBase;
-    private boolean initialized = false;
+    private final boolean useShardedStorage;
+    private final int shardSize;
+    private final long chapterSplitThresholdChars;
+
+    private volatile String currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
+    private volatile boolean initialized;
+    private volatile boolean closed;
 
     public KnowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
-                                   ConcurrencyProperties concurrencyProperties, String baseStoragePath) {
-        this(llmProvider, documentComprehender, concurrencyProperties, baseStoragePath, new DefaultHookExecutor());
+                                ConcurrencyProperties concurrencyProperties, String baseStoragePath,
+                                boolean useShardedStorage, int shardSize, HookExecutor hookExecutor) {
+        this(llmProvider, documentComprehender, concurrencyProperties, baseStoragePath,
+                useShardedStorage, shardSize, 100_000L, hookExecutor);
     }
 
     public KnowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
-                                   ConcurrencyProperties concurrencyProperties, String baseStoragePath, 
-                                   HookExecutor hookExecutor) {
-        this.llmProvider = llmProvider;
-        this.documentComprehender = documentComprehender;
-        this.concurrencyProperties = concurrencyProperties;
-        this.baseStoragePath = Paths.get(baseStoragePath);
-        this.hookExecutor = Objects.requireNonNullElse(hookExecutor, new DefaultHookExecutor());
-        this.currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
+                                ConcurrencyProperties concurrencyProperties, String baseStoragePath,
+                                boolean useShardedStorage, int shardSize,
+                                long chapterSplitThresholdChars, HookExecutor hookExecutor) {
+        this.llmProvider = Objects.requireNonNull(llmProvider, "llmProvider");
+        this.documentComprehender = Objects.requireNonNull(documentComprehender, "documentComprehender");
+        this.concurrencyProperties = Objects.requireNonNull(concurrencyProperties, "concurrencyProperties");
+        this.baseStoragePath = Paths.get(Objects.requireNonNull(baseStoragePath, "baseStoragePath"))
+                .toAbsolutePath();
+        this.useShardedStorage = useShardedStorage;
+        this.shardSize = shardSize;
+        this.chapterSplitThresholdChars = Math.max(1_000L, chapterSplitThresholdChars);
+        this.hookExecutor = Objects.requireNonNullElseGet(hookExecutor, DefaultHookExecutor::new);
     }
 
-    public void initialize() throws IOException {
+    public KnowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
+                                ConcurrencyProperties concurrencyProperties, String baseStoragePath,
+                                HookExecutor hookExecutor) {
+        this(llmProvider, documentComprehender, concurrencyProperties, baseStoragePath,
+                true, ConcurrencyProperties.DEFAULT_SHARD_SIZE, hookExecutor);
+    }
+
+    /** 初始化：加载已有知识库，不存在时创建默认库。重复调用为空操作。 */
+    public synchronized void initialize() {
+        if (closed) {
+            throw new IllegalStateException("KnowledgeBaseManager is closed");
+        }
         if (initialized) {
-            logger.warn("知识库管理器已经初始化，跳过重复初始化");
             return;
         }
-
-        // 打印logo日志
-        System.out.println("");
-        System.out.println(" ________   _______ .______      ______      ____    ____  _______   ______ .___________.  ______   .______   ");
-        System.out.println("|       /  |   ____||   _  \\    /  __  \\     \\   \\  /   / |   ____| /      ||           | /  __  \\  |   _  \\ ");
-        System.out.println("`---/  /   |  |__   |  |_)  |  |  |  |  |     \\   \\/   /  |  |__   |  ,----'`---|  |----`|  |  |  | |  |_)  |");
-        System.out.println("   /  /    |   __|  |      /   |  |  |  |      \\      /   |   __|  |  |         |  |     |  |  |  | |      /");
-        System.out.println("  /  /----.|  |____ |  |\\  \\--.|  `--'  |       \\    /    |  |____ |  `----.    |  |     |  `--'  | |  |\\  \\--.");
-        System.out.println(" /________||_______|| _| `.___| \\______/         \\__/     |_______| \\______|    |__|      \\______/  | _| `.___|");
-        System.out.println("");
-        System.out.println("     Zero Vector  v1.0.0");
-        System.out.println("");
-
-        logger.debug("开始初始化知识库管理器，基础存储路径: {}", baseStoragePath.toAbsolutePath());
 
         try {
             Files.createDirectories(baseStoragePath);
@@ -91,277 +109,217 @@ public class KnowledgeBaseManager {
             throw new StorageException(baseStoragePath.toString(), "initialize", e);
         }
 
+        initialized = true;
         try {
             loadExistingKnowledgeBases();
-        } catch (IOException e) {
-            logger.warn("加载已存在的知识库时遇到问题，将创建新的默认知识库: {}", e.getMessage());
-        }
-
-        if (!managers.containsKey(DEFAULT_KNOWLEDGE_BASE)) {
-            logger.debug("默认知识库不存在，正在创建: {}", DEFAULT_KNOWLEDGE_BASE);
-            try {
+            if (!managers.containsKey(DEFAULT_KNOWLEDGE_BASE)) {
                 createKnowledgeBase(DEFAULT_KNOWLEDGE_BASE);
-            } catch (IOException e) {
-                logger.error("创建默认知识库失败: {}", e.getMessage());
-                throw e;
             }
-        } else {
-            logger.debug("默认知识库已存在: {}", DEFAULT_KNOWLEDGE_BASE);
+            currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
+            logger.info("知识库管理器初始化完成，已加载 {} 个知识库", managers.size());
+        } catch (RuntimeException e) {
+            initialized = false;
+            throw e;
         }
-
-        currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
-        initialized = true;
-
-        logger.info("知识库管理器初始化完成，已加载 {} 个知识库", managers.size());
     }
 
-    private void loadExistingKnowledgeBases() throws IOException {
-        if (!Files.exists(baseStoragePath)) {
-            logger.debug("基础存储路径不存在: {}", baseStoragePath);
-            return;
-        }
-
-        if (!Files.isDirectory(baseStoragePath)) {
-            logger.warn("基础存储路径不是目录: {}", baseStoragePath);
-            return;
-        }
-
-        try {
-            List<Path> kbDirectories = Files.list(baseStoragePath)
-                .filter(Files::isDirectory)
-                .toList();
-
-            logger.debug("发现 {} 个潜在的知识库目录", kbDirectories.size());
-
-            int loadedCount = 0;
-            for (Path kbDir : kbDirectories) {
-                String kbName = kbDir.getFileName().toString();
-                if (isValidKnowledgeBaseName(kbName) && !managers.containsKey(kbName)) {
-                    try {
-                        loadKnowledgeBase(kbName, kbDir);
-                        loadedCount++;
-                    } catch (IOException e) {
-                        logger.error("加载知识库 {} 失败，跳过: {}", kbName, e.getMessage());
-                    }
-                }
-            }
-
-            logger.debug("成功加载 {} 个已存在的知识库", loadedCount);
+    private void loadExistingKnowledgeBases() {
+        List<Path> kbDirectories;
+        try (Stream<Path> stream = Files.list(baseStoragePath)) {
+            kbDirectories = stream.filter(Files::isDirectory).toList();
         } catch (IOException e) {
             throw new StorageException(baseStoragePath.toString(), "loadExistingKnowledgeBases", e);
         }
+
+        for (Path kbDir : kbDirectories) {
+            String name = kbDir.getFileName().toString();
+            if (!isValidKnowledgeBaseName(name) || !isKnowledgeBaseDirectory(kbDir)) {
+                continue;
+            }
+            try {
+                managers.put(name, createManager(name, kbDir));
+                logger.debug("已加载知识库: {}", name);
+            } catch (RuntimeException e) {
+                logger.error("加载知识库 {} 失败，跳过", name, e);
+            }
+        }
     }
 
-    private void loadKnowledgeBase(String name, Path storagePath) throws IOException {
-        logger.debug("加载知识库: {}, 存储路径: {}", name, storagePath);
+    /** 目录必须包含 marker / 树文件 / 分片元数据，避免把上传目录等误识别为知识库。 */
+    private boolean isKnowledgeBaseDirectory(Path path) {
+        return Files.isRegularFile(path.resolve(MARKER_FILE))
+                || Files.isRegularFile(path.resolve(TREE_FILE))
+                || Files.isRegularFile(path.resolve(TREE_DIR).resolve("metadata.json"));
+    }
 
-        if (!isValidKnowledgeBaseDirectory(storagePath)) {
-            logger.warn("知识库目录 {} 不是有效的知识库目录，跳过加载", storagePath);
-            return;
-        }
-
+    private SemanticTreeManager createManager(String name, Path path) {
+        SemanticTreeManager manager = new SemanticTreeManager(
+                llmProvider, documentComprehender, path, useShardedStorage, shardSize,
+                chapterSplitThresholdChars, concurrencyProperties, hookExecutor);
         try {
-            SemanticTreeManager manager = new SemanticTreeManager(
-                llmProvider,
-                documentComprehender,
-                storagePath,
-                true,
-                concurrencyProperties,
-                hookExecutor
-            );
-
-            manager.initialize();
-            managers.put(name, manager);
-
-            logger.debug("知识库 {} 加载成功", name);
+            Files.writeString(path.resolve(MARKER_FILE), "zerovector\n");
         } catch (IOException e) {
-            throw new StorageException(storagePath.toString(), "loadKnowledgeBase", e);
+            manager.close();
+            throw new StorageException(path.toString(), "createKnowledgeBase", e);
         }
+        logger.debug("知识库 {} 已就绪: {}", name, path);
+        return manager;
     }
 
-    private boolean isValidKnowledgeBaseDirectory(Path path) {
-        if (!Files.exists(path)) {
-            return false;
-        }
-
-        if (!Files.isDirectory(path)) {
-            return false;
-        }
-
-        try {
-            return Files.list(path).findAny().isPresent();
-        } catch (IOException e) {
-            logger.warn("无法读取知识库目录 {}: {}", path, e.getMessage());
-            return false;
-        }
-    }
-
-    private boolean isValidKnowledgeBaseName(String name) {
-        if (name == null || name.trim().isEmpty()) {
-            return false;
-        }
-
-        if (name.length() > 50) {
-            return false;
-        }
-
-        return name.matches(NAME_PATTERN);
-    }
-
-    private void validateKnowledgeBaseName(String name) {
-        if (name == null || name.trim().isEmpty()) {
-            throw new IllegalArgumentException("知识库名称不能为空");
-        }
-
-        if (!isValidKnowledgeBaseName(name)) {
-            throw new IllegalArgumentException(
-                "知识库名称格式无效，只能包含字母、数字、下划线和连字符，长度不超过50个字符"
-            );
-        }
-    }
-
-    public SemanticTreeManager createKnowledgeBase(String name) throws IOException {
+    public synchronized SemanticTreeManager createKnowledgeBase(String name) {
+        ensureOpen();
         validateKnowledgeBaseName(name);
-
         if (managers.containsKey(name)) {
             throw new IllegalArgumentException("知识库 '" + name + "' 已存在");
         }
 
-        Path kbStoragePath = getKnowledgeBaseStoragePath(name);
-        
+        Path path = getKnowledgeBaseStoragePath(name);
         try {
-            Files.createDirectories(kbStoragePath);
+            Files.createDirectories(path);
         } catch (IOException e) {
-            throw new StorageException(kbStoragePath.toString(), "createKnowledgeBase", e);
+            throw new StorageException(path.toString(), "createKnowledgeBase", e);
         }
 
-        logger.debug("创建知识库: {}, 存储路径: {}", name, kbStoragePath);
-
+        SemanticTreeManager manager = null;
         try {
-            SemanticTreeManager manager = new SemanticTreeManager(
-                llmProvider,
-                documentComprehender,
-                kbStoragePath,
-                true,
-                concurrencyProperties,
-                hookExecutor
-            );
-
-            manager.initialize();
+            manager = createManager(name, path);
             managers.put(name, manager);
-
             logger.info("知识库 {} 创建成功", name);
-
             return manager;
-        } catch (IOException e) {
-            throw new StorageException(kbStoragePath.toString(), "createKnowledgeBase", e);
+        } catch (RuntimeException e) {
+            if (manager != null) {
+                manager.close();
+            }
+            throw e;
         }
     }
 
-    public void deleteKnowledgeBase(String name) throws IOException {
+    public synchronized void deleteKnowledgeBase(String name) {
+        ensureOpen();
         validateKnowledgeBaseName(name);
-
         if (DEFAULT_KNOWLEDGE_BASE.equals(name)) {
             throw new IllegalArgumentException("不能删除默认知识库 '" + DEFAULT_KNOWLEDGE_BASE + "'");
         }
 
-        if (!managers.containsKey(name)) {
+        SemanticTreeManager manager = managers.remove(name);
+        if (manager == null) {
             throw new IllegalArgumentException("知识库 '" + name + "' 不存在");
         }
+        manager.close();
 
-        SemanticTreeManager manager = managers.remove(name);
-        
-        try {
-            manager.close();
-        } catch (Exception e) {
-            throw new StorageException(getKnowledgeBaseStoragePath(name).toString(), "deleteKnowledgeBase", e);
-        }
-
-        Path kbStoragePath = getKnowledgeBaseStoragePath(name);
-        deleteDirectory(kbStoragePath);
-
-        logger.debug("删除知识库: {}, 存储路径: {}", name, kbStoragePath);
+        Path path = getKnowledgeBaseStoragePath(name);
+        deleteDirectory(path);
 
         if (currentKnowledgeBase.equals(name)) {
-            switchKnowledgeBase(DEFAULT_KNOWLEDGE_BASE);
+            currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
         }
+        logger.info("知识库 {} 已删除", name);
     }
 
     public SemanticTreeManager getKnowledgeBase(String name) {
-        if (name == null || name.trim().isEmpty()) {
+        ensureOpen();
+        if (name == null || name.isBlank()) {
             return getCurrentKnowledgeBase();
         }
-        return managers.get(name);
+        SemanticTreeManager manager = managers.get(name);
+        if (manager == null) {
+            throw new IllegalArgumentException("知识库 '" + name + "' 不存在");
+        }
+        return manager;
     }
 
     public SemanticTreeManager getCurrentKnowledgeBase() {
-        if (!managers.containsKey(currentKnowledgeBase)) {
-            if (managers.containsKey(DEFAULT_KNOWLEDGE_BASE)) {
-                currentKnowledgeBase = DEFAULT_KNOWLEDGE_BASE;
-            } else {
-                logger.warn("当前知识库 {} 不存在，且默认知识库也不存在", currentKnowledgeBase);
-                return null;
-            }
+        ensureOpen();
+        SemanticTreeManager manager = managers.get(currentKnowledgeBase);
+        if (manager == null) {
+            throw new IllegalStateException("当前知识库不存在: " + currentKnowledgeBase);
         }
-        return managers.get(currentKnowledgeBase);
+        return manager;
     }
 
-    public void switchKnowledgeBase(String name) throws IOException {
+    public synchronized void switchKnowledgeBase(String name) {
+        ensureOpen();
         validateKnowledgeBaseName(name);
-
         if (!managers.containsKey(name)) {
             throw new IllegalArgumentException("知识库 '" + name + "' 不存在");
         }
-
-        String oldName = currentKnowledgeBase;
+        String previous = currentKnowledgeBase;
         currentKnowledgeBase = name;
-
-        logger.debug("切换知识库: {} -> {}", oldName, name);
+        logger.debug("切换知识库: {} -> {}", previous, name);
     }
 
     public List<String> listKnowledgeBases() {
-        return new ArrayList<>(managers.keySet());
+        List<String> names = new ArrayList<>(managers.keySet());
+        names.sort(Comparator.naturalOrder());
+        return List.copyOf(names);
     }
 
     public boolean exists(String name) {
-        if (name == null || name.trim().isEmpty()) {
-            return false;
-        }
-        return managers.containsKey(name);
+        return name != null && managers.containsKey(name);
     }
 
     public LLMProvider getLlmProvider() {
         return llmProvider;
     }
 
+    private void validateKnowledgeBaseName(String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("知识库名称不能为空");
+        }
+        if (!isValidKnowledgeBaseName(name)) {
+            throw new IllegalArgumentException(
+                    "知识库名称格式无效，只能包含字母、数字、下划线和连字符，长度不超过50个字符");
+        }
+    }
+
+    private boolean isValidKnowledgeBaseName(String name) {
+        return name != null && !name.isBlank() && name.length() <= 50 && name.matches(NAME_PATTERN);
+    }
+
     private Path getKnowledgeBaseStoragePath(String name) {
         return baseStoragePath.resolve(name);
     }
 
-    private void deleteDirectory(Path path) throws IOException {
-        if (Files.exists(path)) {
-            try (java.util.stream.Stream<Path> stream = Files.walk(path)) {
-                stream.sorted(java.util.Comparator.reverseOrder())
-                      .forEach(p -> {
-                          try {
-                              Files.delete(p);
-                          } catch (IOException e) {
-                              logger.warn("删除文件失败: {}", p, e);
-                          }
-                      });
-            }
+    private void deleteDirectory(Path path) {
+        if (!Files.exists(path)) {
+            return;
+        }
+        try (Stream<Path> stream = Files.walk(path)) {
+            stream.sorted(Comparator.reverseOrder()).forEach(file -> {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (IOException e) {
+                    logger.warn("删除文件失败: {}", file, e);
+                }
+            });
+        } catch (IOException e) {
+            throw new StorageException(path.toString(), "deleteDirectory", e);
         }
     }
 
-    public void close() throws IOException {
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         for (Map.Entry<String, SemanticTreeManager> entry : managers.entrySet()) {
             try {
                 entry.getValue().close();
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 logger.error("关闭知识库 {} 失败", entry.getKey(), e);
             }
         }
         managers.clear();
         logger.debug("知识库管理器已关闭");
+    }
+
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("KnowledgeBaseManager is closed");
+        }
+        if (!initialized) {
+            throw new IllegalStateException("KnowledgeBaseManager is not initialized");
+        }
     }
 }

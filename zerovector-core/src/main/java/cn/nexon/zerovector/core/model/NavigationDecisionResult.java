@@ -38,4 +38,4 @@ public record NavigationDecisionResult(
         Integer selectedIndex,
         java.util.List<Integer> selectedIndexes,
         String reasoning,
-        double confidence) {}
+        Double confidence) {}

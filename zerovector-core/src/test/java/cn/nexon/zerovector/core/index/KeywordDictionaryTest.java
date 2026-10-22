@@ -212,13 +212,12 @@ class KeywordDictionaryTest {
     }
 
     @Test
-    void addEntry_accumulatesWeights() {
+    void addEntry_keepsMaxWeight() {
         KeywordDictionary dict = new KeywordDictionary();
         dict.addEntry("key", "node1", 1.0);
         dict.addEntry("key", "node1", 2.0);
 
-        // weight should be 3.0 (1 + 2)
         Map<String, Double> candidates = dict.matchCandidatesFromKeywords(List.of("key"));
-        assertEquals(3.0, candidates.get("node1"), 0.001);
+        assertEquals(2.0, candidates.get("node1"), 0.001);
     }
 }

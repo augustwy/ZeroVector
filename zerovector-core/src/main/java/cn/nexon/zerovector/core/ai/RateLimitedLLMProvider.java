@@ -22,8 +22,7 @@ import org.slf4j.LoggerFactory;
 import java.util.LinkedList;
 
 /**
- * 滑动窗口限流 LLM 提供者。
- * 在全局范围内限制 LLM API 调用频率，超过限制时自动等待。
+ * 滑动窗口限流 LLM 提供者：在全局范围内限制 API 调用频率，超限时等待。
  */
 public class RateLimitedLLMProvider implements LLMProvider {
 
@@ -31,13 +30,19 @@ public class RateLimitedLLMProvider implements LLMProvider {
 
     private final LLMProvider delegate;
     private final int maxRequests;
-    private final long windowMs;
+    private final long windowNanos;
     private final LinkedList<Long> timestamps = new LinkedList<>();
 
     public RateLimitedLLMProvider(LLMProvider delegate, int maxRequests, int windowSeconds) {
+        if (maxRequests < 1) {
+            throw new IllegalArgumentException("maxRequests must be >= 1");
+        }
+        if (windowSeconds < 1) {
+            throw new IllegalArgumentException("windowSeconds must be >= 1");
+        }
         this.delegate = delegate;
         this.maxRequests = maxRequests;
-        this.windowMs = windowSeconds * 1000L;
+        this.windowNanos = windowSeconds * 1_000_000_000L;
     }
 
     @Override
@@ -47,11 +52,12 @@ public class RateLimitedLLMProvider implements LLMProvider {
     }
 
     private void acquire() {
-        long waitMs;
-        while ((waitMs = tryAcquire()) > 0) {
-            logger.debug("LLM 限流等待 {}ms ({}次/{}s)", waitMs, maxRequests, windowMs / 1000);
+        long waitNanos;
+        while ((waitNanos = tryAcquire()) > 0) {
+            logger.debug("LLM 限流等待 {}ms ({}/{}s)", waitNanos / 1_000_000,
+                    maxRequests, windowNanos / 1_000_000_000L);
             try {
-                Thread.sleep(waitMs);
+                Thread.sleep(waitNanos / 1_000_000, (int) (waitNanos % 1_000_000));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
@@ -60,13 +66,13 @@ public class RateLimitedLLMProvider implements LLMProvider {
     }
 
     private synchronized long tryAcquire() {
-        long now = System.currentTimeMillis();
-        long cutoff = now - windowMs;
+        long now = System.nanoTime();
+        long cutoff = now - windowNanos;
         while (!timestamps.isEmpty() && timestamps.getFirst() < cutoff) {
             timestamps.removeFirst();
         }
         if (timestamps.size() >= maxRequests) {
-            return timestamps.getFirst() + windowMs - now;
+            return Math.max(1, timestamps.getFirst() + windowNanos - now);
         }
         timestamps.addLast(now);
         return 0;

@@ -20,18 +20,20 @@ import cn.nexon.zerovector.core.ai.LLMUsageStats;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.model.NavigationPath;
 import cn.nexon.zerovector.core.model.NavigationResult;
-import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
 
 record SearchResultImpl(
-    String query,
-    ChunkStorage chunkStorage,
-    NavigationResult navigationResult
+        String query,
+        NavigationResult navigationResult,
+        Function<DocumentChunk, String> contentLoader
 ) implements SearchResult {
+
+    SearchResultImpl {
+        Objects.requireNonNull(navigationResult, "navigationResult");
+    }
 
     @Override
     public List<DocumentChunk> documents() {
@@ -56,26 +58,34 @@ record SearchResultImpl(
     @Override
     public String toDocumentText() {
         List<DocumentChunk> docs = documents();
-        if (docs == null || docs.isEmpty()) return "";
+        if (docs == null || docs.isEmpty()) {
+            return "";
+        }
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < docs.size(); i++) {
-            sb.append("[").append(i + 1).append("] ");
-            sb.append(getChunkContent(docs.get(i))).append("\n\n");
+            sb.append("[").append(i + 1).append("] ")
+                    .append(getChunkContent(docs.get(i)))
+                    .append("\n\n");
         }
         return sb.toString().trim();
     }
 
     @Override
     public String getChunkContent(DocumentChunk chunk) {
-        if (chunk.isFilePathBased() && chunk.filePath() != null) {
-            try {
-                return Files.readString(Path.of(chunk.filePath()));
-            } catch (IOException e) { /* fall through */ }
+        if (chunk == null) {
+            return "";
+        }
+        if (chunk.hasContent()) {
+            return chunk.content();
         }
         try {
-            String content = chunkStorage.getChunkContent(chunk.id());
-            if (content != null && !content.isEmpty()) return content;
-        } catch (Exception e) { /* fall through */ }
+            String content = contentLoader.apply(chunk);
+            if (content != null && !content.isEmpty()) {
+                return content;
+            }
+        } catch (RuntimeException e) {
+            // 读取失败时回退到摘要，由调用方决定是否提示用户
+        }
         return chunk.summary() != null ? chunk.summary() : "";
     }
 }

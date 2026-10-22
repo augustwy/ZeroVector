@@ -116,9 +116,7 @@ class MMapDocumentStoreTest {
     @Test
     void indexPersists_acrossCloseReopen() throws IOException {
         Path dataFile = tempDir.resolve("persist.data");
-        Path indexPath = tempDir.resolve("persist.data.index");
 
-        // First session
         {
             MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString());
             store.addChunk("persistent1", "survives close");
@@ -126,47 +124,46 @@ class MMapDocumentStoreTest {
             store.close();
         }
 
-        assertTrue(Files.exists(indexPath), "Index file should exist after close");
-
-        // Second session
         try (MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString())) {
             assertEquals("survives close", store.getChunk("persistent1"));
             assertEquals("also survives", store.getChunk("persistent2"));
+
+            // 重启后追加必须从索引末尾继续，而不是覆盖 offset 0
+            store.addChunk("persistent3", "appended after reopen");
+            assertEquals("survives close", store.getChunk("persistent1"));
+            assertEquals("also survives", store.getChunk("persistent2"));
+            assertEquals("appended after reopen", store.getChunk("persistent3"));
         }
     }
 
     @Test
-    @Disabled("compact() fails on Windows due to MMap file lock; works on Linux/macOS")
     void compact_reclaimsSpace() throws IOException {
         Path dataFile = tempDir.resolve("compact.data");
-        MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString());
+        try (MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString())) {
+            store.addChunk("k1", "data1");
+            store.addChunk("k2", "data2");
+            store.addChunk("k3", "data3");
 
-        store.addChunk("k1", "data1");
-        store.addChunk("k2", "data2");
-        store.addChunk("k3", "data3");
+            store.deleteChunk("k2");
+            store.compact();
 
-        store.deleteChunk("k2");
-        store.compact();
-
-        assertEquals("data1", store.getChunk("k1"));
-        assertEquals("data3", store.getChunk("k3"));
-        assertNull(store.getChunk("k2"));
-        store.close();
+            assertEquals("data1", store.getChunk("k1"));
+            assertEquals("data3", store.getChunk("k3"));
+            assertNull(store.getChunk("k2"));
+        }
     }
 
     @Test
-    @Disabled("compact() fails on Windows due to MMap file lock; works on Linux/macOS")
     void compact_emptyStore_resetsBuffer() throws IOException {
         Path dataFile = tempDir.resolve("emptycompact.data");
-        MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString());
+        try (MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString())) {
+            store.addChunk("tmp", "temp");
+            store.deleteChunk("tmp");
+            store.compact();
 
-        store.addChunk("tmp", "temp");
-        store.deleteChunk("tmp");
-        store.compact();
-
-        String usage = store.getUsageInfo();
-        assertTrue(usage.contains("0/"), "After compacting all data, usage should show 0 used");
-        store.close();
+            assertTrue(store.getUsageInfo().contains("0/"),
+                    "After compacting all data, usage should show 0 used");
+        }
     }
 
     @Test
@@ -195,15 +192,17 @@ class MMapDocumentStoreTest {
     @Test
     void saveAndLoadIndex_manually() throws IOException {
         Path dataFile = tempDir.resolve("manualindex.data");
-        MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString());
-        store.addChunk("manual1", "manual content");
-        store.saveIndex();
-        store.close();
-
         Path indexPath = tempDir.resolve("manualindex.data.index");
-        assertTrue(Files.exists(indexPath));
-        String indexContent = Files.readString(indexPath);
-        assertTrue(indexContent.contains("manual1"));
+        try (MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString())) {
+            store.addChunk("manual1", "manual content");
+            store.saveIndex();
+            assertTrue(Files.exists(indexPath));
+            assertTrue(Files.readString(indexPath).contains("# zerovector mmap index"));
+        }
+
+        try (MMapDocumentStore store = MMapDocumentStore.open(dataFile.toString())) {
+            assertEquals("manual content", store.getChunk("manual1"));
+        }
     }
 
     @Test

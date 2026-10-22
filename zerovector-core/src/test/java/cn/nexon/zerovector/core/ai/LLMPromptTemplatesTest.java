@@ -75,10 +75,11 @@ class LLMPromptTemplatesTest {
 
     @Test
     void comprehendChunk_containsChunksAndContext() {
-        String prompt = LLMPromptTemplates.comprehendChunk("some context here", 1, 3);
+        String prompt = LLMPromptTemplates.comprehendChunk("some context here", "current chunk", 1, 3);
         assertTrue(prompt.contains("第1部分"));
         assertTrue(prompt.contains("共3部分"));
         assertTrue(prompt.contains("some context here"));
+        assertTrue(prompt.contains("current chunk"));
         assertTrue(prompt.contains("keywordDefinitions"));
         assertTrue(prompt.contains("exampleQuestions"));
     }

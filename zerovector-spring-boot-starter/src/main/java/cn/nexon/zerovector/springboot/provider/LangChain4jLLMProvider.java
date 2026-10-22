@@ -19,26 +19,18 @@ package cn.nexon.zerovector.springboot.provider;
 import cn.nexon.zerovector.core.ai.LLMProvider;
 import cn.nexon.zerovector.core.ai.LLMResponse;
 import cn.nexon.zerovector.core.ai.SmartCacheStrategy;
-import cn.nexon.zerovector.core.util.MD5Util;
 import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-
-import java.util.concurrent.TimeUnit;
-
+/**
+ * LangChain4j LLM 适配器。
+ */
 public class LangChain4jLLMProvider implements LLMProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(LangChain4jLLMProvider.class);
 
     private final ChatModel chatModel;
-
-    private final Cache<String, String> summaryCache = Caffeine.newBuilder()
-            .maximumSize(1000)
-            .expireAfterAccess(30, TimeUnit.MINUTES)
-            .build();
 
     public LangChain4jLLMProvider(ChatModel chatModel) {
         this.chatModel = chatModel;
@@ -46,33 +38,14 @@ public class LangChain4jLLMProvider implements LLMProvider {
 
     @Override
     public LLMResponse chat(String prompt, SmartCacheStrategy.RequestType type) {
-        if (type == SmartCacheStrategy.RequestType.GENERATE_SUMMARY) {
-            String cacheKey = "summary_" + MD5Util.calculateMD5(prompt);
-            String cached = summaryCache.getIfPresent(cacheKey);
-            if (cached != null) {
-                return LLMResponse.success(cached, 0, 0, 0);
-            }
-            LLMResponse response = execute(prompt, "生成摘要");
-            if (response.success()) {
-                summaryCache.put(cacheKey, response.content());
-            }
-            return response;
-        }
-        String opName = type.name().toLowerCase().replace('_', ' ');
-        return execute(prompt, opName);
-    }
-
-    private LLMResponse execute(String prompt, String operationName) {
         long startTime = System.currentTimeMillis();
         try {
             String result = chatModel.chat(prompt);
-            long duration = System.currentTimeMillis() - startTime;
-            logger.debug("LLM原始响应: {}", result);
-            return LLMResponse.success(result, duration);
+            logger.debug("LLM 原始响应 [{}]: {}", type, result);
+            return LLMResponse.success(result, System.currentTimeMillis() - startTime);
         } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            logger.error("{}失败", operationName, e);
-            return LLMResponse.failure(e.getMessage(), duration);
+            logger.error("LLM 调用失败 [{}]", type, e);
+            return LLMResponse.failure(e.getMessage(), System.currentTimeMillis() - startTime);
         }
     }
 }

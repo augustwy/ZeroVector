@@ -19,10 +19,11 @@ package cn.nexon.zerovector.core.storage.local;
 import cn.nexon.zerovector.core.exception.StorageException;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.storage.ShardedMMapStore;
-import cn.nexon.zerovector.core.storage.ShardedTreeStorage;
 import cn.nexon.zerovector.core.storage.config.ChunkStorageConfig;
 import cn.nexon.zerovector.core.storage.spi.ChunkStorage;
 import cn.nexon.zerovector.core.storage.spi.StorageProvider;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,23 +37,14 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
- * 本地文件文档分片存储
- * 
- * <p>基于 mmap 和分片存储的本地文件实现，提供高性能的文档分片存储
- * 
- * <p>存储结构：
- * <pre>
- * {basePath}/
- * ├── chunks.data        # mmap 数据文件
- * ├── chunks.data.index  # mmap 索引文件
- * └── shards/            # 分片存储目录（可选）
- *     ├── metadata.json
- *     ├── chunk_*.json
- *     └── node_*.json
- * </pre>
+ * 本地文件正文存储。
+ *
+ * <p>正文写入 {@link ShardedMMapStore}（按 chunkId 哈希分片），内存中仅保留
+ * 最近访问的分片元数据缓存。语义树负责保存摘要等元数据，本实现只负责正文，
+ * 避免同一份正文在树文件里重复落盘。
  */
 @StorageProvider(type = "local-mmap", priority = 1, description = "本地文件存储（基于 mmap）")
 public class LocalFileChunkStorage implements ChunkStorage {
@@ -60,40 +52,42 @@ public class LocalFileChunkStorage implements ChunkStorage {
     private static final Logger logger = LoggerFactory.getLogger(LocalFileChunkStorage.class);
 
     private ShardedMMapStore mmapStore;
-    private ShardedTreeStorage shardedStorage;
     private ChunkStorageConfig config;
-    private boolean initialized = false;
+    private boolean initialized;
 
-    // 导航路径会经 parallelStream 并发读写此缓存，必须使用并发容器
-    private final Map<String, DocumentChunk> chunkCache = new ConcurrentHashMap<>();
+    // 导航路径会并发读取，必须使用并发容器；限制容量避免大知识库常驻内存
+    private final Cache<String, DocumentChunk> chunkCache = Caffeine.newBuilder()
+            .maximumSize(5000)
+            .expireAfterAccess(30, TimeUnit.MINUTES)
+            .build();
 
     @Override
     public void initialize(ChunkStorageConfig config) throws StorageException {
         if (initialized) {
-            logger.warn("LocalFileChunkStorage 已经初始化");
             return;
+        }
+        if (config == null || config.getBasePath() == null || config.getBasePath().isBlank()) {
+            throw new StorageException("chunk", "initialize",
+                    new IllegalArgumentException("basePath must not be empty"));
         }
 
         this.config = config;
 
         try {
-            Path basePath = Paths.get(config.getBasePath());
-            Files.createDirectories(basePath.getParent());
+            Path basePath = Paths.get(config.getBasePath()).toAbsolutePath();
+            Path parent = basePath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
 
             if (config.isUseMmap()) {
                 int shardCount = Math.max(1, config.getMmapShardCount());
-                this.mmapStore = ShardedMMapStore.open(config.getBasePath(), shardCount);
-                logger.debug("已初始化分片 mmap 存储: basePath={}, shards={}", config.getBasePath(), shardCount);
-            }
-
-            if (config.isSharded()) {
-                String shardDir = config.getBasePath() + "_shards";
-                this.shardedStorage = new ShardedTreeStorage(shardDir, config.getShardSize());
-                logger.debug("已初始化分片存储: {}", shardDir);
+                this.mmapStore = ShardedMMapStore.open(basePath.toString(), shardCount);
+                logger.debug("已初始化分片 mmap 存储: basePath={}, shards={}", basePath, shardCount);
             }
 
             initialized = true;
-            logger.debug("LocalFileChunkStorage 初始化完成, basePath: {}", config.getBasePath());
+            logger.debug("LocalFileChunkStorage 初始化完成, basePath: {}", basePath);
         } catch (IOException e) {
             throw new StorageException(config.getBasePath(), "initialize", e);
         }
@@ -102,133 +96,101 @@ public class LocalFileChunkStorage implements ChunkStorage {
     @Override
     public void saveChunk(DocumentChunk chunk) throws StorageException {
         checkInitialized();
-
-        if (chunk == null) {
-            throw new IllegalArgumentException("chunk 不能为 null");
+        if (chunk == null || chunk.id() == null || chunk.id().isBlank()) {
+            throw new IllegalArgumentException("chunk id must not be empty");
         }
 
-        try {
-            if (config.isUseMmap() && !chunk.isFilePathBased()) {
+        if (mmapStore != null && chunk.hasContent()) {
+            try {
                 mmapStore.addChunk(chunk.id(), chunk.content());
+            } catch (IOException e) {
+                throw new StorageException(chunk.id(), "saveChunk", e);
             }
-
+            // 只缓存元数据，正文按需从 mmap 读取，避免常驻内存
+            chunkCache.put(chunk.id(), DocumentChunk.metadataOnly(
+                    chunk.id(), chunk.summary(), chunk.md5(), chunk.metadata()));
+        } else {
             chunkCache.put(chunk.id(), chunk);
-            logger.debug("保存文档分片: {}", chunk.id());
-        } catch (IOException e) {
-            throw new StorageException(chunk.id(), "saveChunk", e);
         }
+        logger.debug("保存文档分片: {}", chunk.id());
     }
 
     @Override
     public void saveChunks(Map<String, DocumentChunk> chunks) throws StorageException {
-        checkInitialized();
-
         if (chunks == null || chunks.isEmpty()) {
             return;
         }
-
         for (DocumentChunk chunk : chunks.values()) {
             saveChunk(chunk);
         }
-
         logger.debug("批量保存文档分片: {} 个", chunks.size());
     }
 
     @Override
     public DocumentChunk getChunk(String chunkId) throws StorageException {
         checkInitialized();
-
         if (chunkId == null || chunkId.isEmpty()) {
             return null;
         }
 
-        DocumentChunk cached = chunkCache.get(chunkId);
+        DocumentChunk cached = chunkCache.getIfPresent(chunkId);
         if (cached != null) {
             return cached;
         }
 
-        if (shardedStorage != null) {
-            try {
-                DocumentChunk chunk = shardedStorage.getChunk(chunkId);
-                if (chunk != null) {
-                    chunkCache.put(chunkId, chunk);
-                    return chunk;
-                }
-            } catch (IOException e) {
-                throw new StorageException(chunkId, "getChunk", e);
-            }
+        if (mmapStore != null && mmapStore.containsChunk(chunkId)) {
+            // 正文可读，但摘要等元数据由语义树持有，这里只返回占位元数据
+            return DocumentChunk.metadataOnly(chunkId, "", null, Map.of());
         }
-
         return null;
     }
 
     @Override
     public String getChunkContent(String chunkId) throws StorageException {
         checkInitialized();
-
         if (chunkId == null || chunkId.isEmpty()) {
             return null;
         }
 
-        DocumentChunk chunk = getChunk(chunkId);
-        if (chunk == null) {
-            return null;
+        DocumentChunk cached = chunkCache.getIfPresent(chunkId);
+        if (cached != null && cached.hasContent()) {
+            return cached.content();
         }
-
-        if (chunk.isFilePathBased()) {
-            try {
-                return Files.readString(Paths.get(chunk.filePath()));
-            } catch (IOException e) {
-                throw new StorageException(chunk.filePath(), "readChunkContent", e);
-            }
-        }
-
-        if (config.isUseMmap() && mmapStore != null) {
+        if (mmapStore != null) {
             return mmapStore.getChunk(chunkId);
         }
-
-        return chunk.content();
+        return null;
     }
 
     @Override
     public void deleteChunk(String chunkId) throws StorageException {
         checkInitialized();
-
         if (chunkId == null || chunkId.isEmpty()) {
             return;
         }
-
-        chunkCache.remove(chunkId);
-        // 级联删除 mmap 数据，否则缓存失效后"已删除"的 chunk 会复活
-        // 注：shardedStorage 的分片文件包含多个 chunk，无法按条删除，其元数据仍会保留
+        chunkCache.invalidate(chunkId);
         if (mmapStore != null) {
             mmapStore.deleteChunk(chunkId);
         }
-        logger.debug("删除文档分片: {}", chunkId);
     }
 
     @Override
     public boolean exists(String chunkId) {
-        if (chunkId == null || chunkId.isEmpty()) {
+        if (!initialized || chunkId == null || chunkId.isEmpty()) {
             return false;
         }
-
-        if (chunkCache.containsKey(chunkId)) {
-            return true;
-        }
-
-        if (shardedStorage != null && shardedStorage.getChunkShardIndex().containsKey(chunkId)) {
-            return true;
-        }
-
-        return false;
+        return chunkCache.asMap().containsKey(chunkId)
+                || (mmapStore != null && mmapStore.containsChunk(chunkId));
     }
 
     @Override
     public Set<String> getAllChunkIds() {
-        Set<String> ids = new HashSet<>(chunkCache.keySet());
-        if (shardedStorage != null) {
-            ids.addAll(shardedStorage.getChunkShardIndex().keySet());
+        if (!initialized) {
+            return Set.of();
+        }
+        Set<String> ids = new HashSet<>(chunkCache.asMap().keySet());
+        if (mmapStore != null) {
+            ids.addAll(mmapStore.getAllChunkIds());
         }
         return Collections.unmodifiableSet(ids);
     }
@@ -236,9 +198,8 @@ public class LocalFileChunkStorage implements ChunkStorage {
     @Override
     public Map<String, DocumentChunk> getChunks(Collection<String> chunkIds) {
         if (chunkIds == null || chunkIds.isEmpty()) {
-            return Collections.emptyMap();
+            return Map.of();
         }
-
         Map<String, DocumentChunk> result = new HashMap<>();
         for (String chunkId : chunkIds) {
             DocumentChunk chunk = getChunk(chunkId);
@@ -246,16 +207,33 @@ public class LocalFileChunkStorage implements ChunkStorage {
                 result.put(chunkId, chunk);
             }
         }
-
         return result;
     }
 
     @Override
     public void clear() throws StorageException {
         checkInitialized();
-
-        chunkCache.clear();
+        chunkCache.invalidateAll();
+        if (mmapStore != null) {
+            try {
+                mmapStore.clear();
+            } catch (IOException e) {
+                throw new StorageException(config.getBasePath(), "clear", e);
+            }
+        }
         logger.debug("清空所有文档分片");
+    }
+
+    @Override
+    public void flush() throws StorageException {
+        checkInitialized();
+        if (mmapStore != null) {
+            try {
+                mmapStore.flush();
+            } catch (IOException e) {
+                throw new StorageException(config.getBasePath(), "flush", e);
+            }
+        }
     }
 
     @Override
@@ -274,33 +252,14 @@ public class LocalFileChunkStorage implements ChunkStorage {
             mmapStore.close();
             mmapStore = null;
         }
-
-        if (shardedStorage != null) {
-            shardedStorage.close();
-            shardedStorage = null;
-        }
-
-        chunkCache.clear();
+        chunkCache.invalidateAll();
         initialized = false;
         logger.debug("LocalFileChunkStorage 已关闭");
     }
 
-    /**
-     * 保存索引
-     * 
-     * @throws StorageException 存储异常
-     */
-    public void saveIndex() throws StorageException {
-        if (mmapStore != null) {
-            mmapStore.saveIndex();
-            logger.debug("已保存 mmap 索引");
-        }
-    }
-
-    private void checkInitialized() throws StorageException {
+    private void checkInitialized() {
         if (!initialized) {
-            throw new StorageException("storage", "not initialized",
-                new IllegalStateException("存储未初始化"));
+            throw new StorageException("chunk", "access", new IllegalStateException("存储未初始化"));
         }
     }
 }

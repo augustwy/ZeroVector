@@ -37,9 +37,9 @@ class LocalFileChunkStorageTest {
 
     private ChunkStorageConfig createConfig() {
         ChunkStorageConfig config = new ChunkStorageConfig();
-        config.setBasePath(tempDir.resolve("chunks.data").toString());
-        config.setUseMmap(false);
-        config.setSharded(false);
+        config.setBasePath(tempDir.resolve("chunks").toString());
+        config.setUseMmap(true);
+        config.setMmapShardCount(2);
         return config;
     }
 
@@ -61,20 +61,24 @@ class LocalFileChunkStorageTest {
             DocumentChunk retrieved = storage.getChunk("c1");
             assertNotNull(retrieved);
             assertEquals("c1", retrieved.id());
-            assertEquals("hello world", retrieved.content());
+            assertEquals("hello world", storage.getChunkContent("c1"));
         }
     }
 
     @Test
-    void saveAndGetChunk_filePathBased() throws IOException {
+    void contentSurvivesReopen() throws IOException {
+        ChunkStorageConfig config = createConfig();
         try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
-            storage.initialize(createConfig());
-            DocumentChunk chunk = DocumentChunk.withFilePath("c1", "summary", "/path/to/file", Map.of());
-            storage.saveChunk(chunk);
+            storage.initialize(config);
+            storage.saveChunk(DocumentChunk.withContent("persist", "durable content", "sum", Map.of()));
+            storage.flush();
+        }
 
-            DocumentChunk retrieved = storage.getChunk("c1");
-            assertNotNull(retrieved);
-            assertTrue(retrieved.isFilePathBased());
+        try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
+            storage.initialize(config);
+            assertTrue(storage.exists("persist"));
+            assertEquals("durable content", storage.getChunkContent("persist"));
+            assertNotNull(storage.getChunk("persist"));
         }
     }
 
@@ -83,6 +87,7 @@ class LocalFileChunkStorageTest {
         try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
             storage.initialize(createConfig());
             assertNull(storage.getChunk("nonexistent"));
+            assertNull(storage.getChunkContent("nonexistent"));
         }
     }
 
@@ -90,20 +95,18 @@ class LocalFileChunkStorageTest {
     void saveChunks_batch() throws IOException {
         try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
             storage.initialize(createConfig());
-            Map<String, DocumentChunk> chunks = Map.of(
-                "k1", DocumentChunk.withContent("k1", "val1", "sum1", Map.of()),
-                "k2", DocumentChunk.withContent("k2", "val2", "sum2", Map.of())
-            );
-            storage.saveChunks(chunks);
+            storage.saveChunks(Map.of(
+                    "k1", DocumentChunk.withContent("k1", "val1", "sum1", Map.of()),
+                    "k2", DocumentChunk.withContent("k2", "val2", "sum2", Map.of())));
 
             assertEquals(2, storage.getAllChunkIds().size());
-            assertNotNull(storage.getChunk("k1"));
-            assertNotNull(storage.getChunk("k2"));
+            assertEquals("val1", storage.getChunkContent("k1"));
+            assertEquals("val2", storage.getChunkContent("k2"));
         }
     }
 
     @Test
-    void deleteChunk_removesFromCache() throws IOException {
+    void deleteChunk_removesContent() throws IOException {
         try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
             storage.initialize(createConfig());
             storage.saveChunk(DocumentChunk.withContent("c1", "content", "summary", Map.of()));
@@ -111,6 +114,7 @@ class LocalFileChunkStorageTest {
 
             storage.deleteChunk("c1");
             assertFalse(storage.exists("c1"));
+            assertNull(storage.getChunkContent("c1"));
         }
     }
 
@@ -123,17 +127,7 @@ class LocalFileChunkStorageTest {
             storage.clear();
 
             assertTrue(storage.getAllChunkIds().isEmpty());
-        }
-    }
-
-    @Test
-    void exists_checksCache() throws IOException {
-        try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
-            storage.initialize(createConfig());
-            assertFalse(storage.exists("nonexistent"));
-
-            storage.saveChunk(DocumentChunk.withContent("c1", "c", "s", Map.of()));
-            assertTrue(storage.exists("c1"));
+            assertFalse(storage.exists("c1"));
         }
     }
 
@@ -163,8 +157,8 @@ class LocalFileChunkStorageTest {
     void notInitialized_throwsException() {
         LocalFileChunkStorage storage = new LocalFileChunkStorage();
         assertThrows(StorageException.class, () -> storage.saveChunk(
-            DocumentChunk.withContent("c1", "x", "s", Map.of())));
-        assertThrows(StorageException.class, () -> storage.clear());
+                DocumentChunk.withContent("c1", "x", "s", Map.of())));
+        assertThrows(StorageException.class, storage::clear);
     }
 
     @Test
@@ -177,21 +171,20 @@ class LocalFileChunkStorageTest {
     }
 
     @Test
-    void getChunkContent_contentBased_returnsContent() throws IOException {
-        try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
-            storage.initialize(createConfig());
-            storage.saveChunk(DocumentChunk.withContent("c1", "my content", "sum", Map.of()));
-            assertEquals("my content", storage.getChunkContent("c1"));
-        }
-    }
-
-    @Test
     void getAllChunkIds_returnsUnmodifiable() throws IOException {
         try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
             storage.initialize(createConfig());
             storage.saveChunk(DocumentChunk.withContent("c1", "x", "s", Map.of()));
             Set<String> ids = storage.getAllChunkIds();
             assertThrows(UnsupportedOperationException.class, () -> ids.add("extra"));
+        }
+    }
+
+    @Test
+    void initialize_withoutBasePath_throws() throws IOException {
+        try (LocalFileChunkStorage storage = new LocalFileChunkStorage()) {
+            ChunkStorageConfig config = new ChunkStorageConfig();
+            assertThrows(StorageException.class, () -> storage.initialize(config));
         }
     }
 }

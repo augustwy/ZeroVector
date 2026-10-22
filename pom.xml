@@ -8,17 +8,63 @@
     <artifactId>zerovector</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
+
+    <name>ZeroVector</name>
+    <description>Zero-copy semantic tree knowledge base</description>
+
     <modules>
         <module>zerovector-core</module>
-        <module>zerovector-app</module>
         <module>zerovector-spring-boot-starter</module>
         <module>zerovector-spring-boot-example</module>
     </modules>
 
     <properties>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
+        <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <spring-boot.version>4.0.0</spring-boot.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <langchain4j.version>1.15.0</langchain4j.version>
+        <jackson.version>2.15.2</jackson.version>
+        <caffeine.version>3.1.8</caffeine.version>
+        <slf4j.version>2.0.16</slf4j.version>
+        <junit.version>5.10.0</junit.version>
+        <mockito.version>5.14.2</mockito.version>
     </properties>
 
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.5.2</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <version>${spring-boot.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
 </project>

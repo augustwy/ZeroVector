@@ -16,17 +16,18 @@
 
 package cn.nexon.zerovector.core.storage;
 
-import cn.nexon.zerovector.core.model.DocumentChunk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * 哈希分片 mmap 存储包装器。
  *
  * <p>将 chunkId 按哈希值路由到多个 {@link MMapDocumentStore} 实例，
- * 每个分片有独立的文件、buffer 和锁，消除单缓冲区全局锁争用。
+ * 每个分片有独立的文件、映射和锁，降低锁争用并规避单文件 2GB 上限。
  *
  * <p>文件布局：
  * <pre>
@@ -35,7 +36,7 @@ import java.io.IOException;
  * ...
  * </pre>
  */
-public class ShardedMMapStore implements AutoCloseable {
+public final class ShardedMMapStore implements AutoCloseable {
 
     private static final Logger logger = LoggerFactory.getLogger(ShardedMMapStore.class);
 
@@ -45,28 +46,35 @@ public class ShardedMMapStore implements AutoCloseable {
         this.shards = shards;
     }
 
-    /**
-     * 打开分片存储。
-     *
-     * @param basePath   数据文件基础路径（不含后缀）
-     * @param shardCount 分片数
-     * @throws IOException 文件打开失败
-     */
     public static ShardedMMapStore open(String basePath, int shardCount) throws IOException {
         if (shardCount < 1) {
             throw new IllegalArgumentException("shardCount must be >= 1, got: " + shardCount);
         }
         MMapDocumentStore[] shards = new MMapDocumentStore[shardCount];
-        for (int i = 0; i < shardCount; i++) {
-            String shardPath = basePath + "_shard" + i + ".data";
-            shards[i] = MMapDocumentStore.open(shardPath);
+        try {
+            for (int i = 0; i < shardCount; i++) {
+                shards[i] = MMapDocumentStore.open(basePath + "_shard" + i + ".data");
+            }
+        } catch (IOException | RuntimeException e) {
+            for (MMapDocumentStore shard : shards) {
+                if (shard != null) {
+                    try {
+                        shard.close();
+                    } catch (IOException ignored) {
+                        // best effort
+                    }
+                }
+            }
+            throw e;
         }
         logger.debug("分片 mmap 存储已打开: basePath={}, shardCount={}", basePath, shardCount);
         return new ShardedMMapStore(shards);
     }
 
     private int shardFor(String chunkId) {
-        // floorMod 保证结果非负（abs(Integer.MIN_VALUE) 仍为负，会导致数组越界）
+        if (chunkId == null || chunkId.isEmpty()) {
+            throw new IllegalArgumentException("chunkId must not be empty");
+        }
         return Math.floorMod(chunkId.hashCode(), shards.length);
     }
 
@@ -78,17 +86,37 @@ public class ShardedMMapStore implements AutoCloseable {
         return shards[shardFor(chunkId)].getChunk(chunkId);
     }
 
-    public String getChunkContent(DocumentChunk chunk) {
-        return shards[shardFor(chunk.id())].getChunkContent(chunk);
+    public boolean containsChunk(String chunkId) {
+        return chunkId != null && !chunkId.isEmpty() && shards[shardFor(chunkId)].containsChunk(chunkId);
     }
 
     public boolean deleteChunk(String chunkId) {
-        return shards[shardFor(chunkId)].deleteChunk(chunkId);
+        return chunkId != null && !chunkId.isEmpty() && shards[shardFor(chunkId)].deleteChunk(chunkId);
+    }
+
+    public Set<String> getAllChunkIds() {
+        Set<String> ids = new HashSet<>();
+        for (MMapDocumentStore shard : shards) {
+            ids.addAll(shard.getAllChunkIds());
+        }
+        return ids;
     }
 
     public void saveIndex() {
         for (MMapDocumentStore shard : shards) {
             shard.saveIndex();
+        }
+    }
+
+    public void flush() throws IOException {
+        for (MMapDocumentStore shard : shards) {
+            shard.flush();
+        }
+    }
+
+    public void clear() throws IOException {
+        for (MMapDocumentStore shard : shards) {
+            shard.clear();
         }
     }
 
@@ -101,7 +129,7 @@ public class ShardedMMapStore implements AutoCloseable {
     public String getUsageInfo() {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < shards.length; i++) {
-            sb.append("shard").append(i).append(": ").append(shards[i].getUsageInfo()).append("\n");
+            sb.append("shard").append(i).append(": ").append(shards[i].getUsageInfo()).append(System.lineSeparator());
         }
         return sb.toString();
     }

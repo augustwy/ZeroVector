@@ -17,15 +17,15 @@
 package cn.nexon.zerovector.core.storage.local;
 
 import cn.nexon.zerovector.core.exception.StorageException;
+import cn.nexon.zerovector.core.index.KeywordDictionary;
 import cn.nexon.zerovector.core.model.KeywordDefinition;
 import cn.nexon.zerovector.core.storage.config.DictionaryStorageConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -35,179 +35,74 @@ class LocalFileDictionaryStorageTest {
     Path tempDir;
 
     private DictionaryStorageConfig createConfig() {
-        DictionaryStorageConfig config = new DictionaryStorageConfig();
-        config.setFilePath(tempDir.resolve("test.dict").toString());
-        return config;
+        return new DictionaryStorageConfig(tempDir.resolve("dictionary.json").toString());
     }
 
     @Test
-    void initialize_createsDictionary() throws IOException {
+    void initialize_isHealthy() {
         try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
             storage.initialize(createConfig());
             assertTrue(storage.isHealthy());
-            assertEquals(0, storage.size());
         }
     }
 
     @Test
-    void saveAndGetKeywordDefinition() throws IOException {
+    void load_withoutFile_returnsEmptyDictionary() {
         try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
             storage.initialize(createConfig());
-            KeywordDefinition def = KeywordDefinition.of("ZeroVector", "A KB system", "doc context", "doc1");
-            storage.saveKeywordDefinition(def);
-
-            var retrieved = storage.getKeywordDefinition("ZeroVector");
-            assertTrue(retrieved.isPresent());
-            assertEquals("A KB system", retrieved.get().definition());
-            assertEquals("doc1", retrieved.get().documentId());
+            assertEquals(0, storage.load().size());
         }
     }
 
     @Test
-    void saveKeywordDefinitions_batch() throws IOException {
+    void saveAndLoad_roundtrip() {
+        DictionaryStorageConfig config = createConfig();
         try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            List<KeywordDefinition> defs = List.of(
-                KeywordDefinition.of("key1", "def1", "ctx1", "doc1"),
-                KeywordDefinition.of("key2", "def2", "ctx2", "doc2")
-            );
-            storage.saveKeywordDefinitions(defs);
-            assertEquals(2, storage.size());
-        }
-    }
-
-    @Test
-    void getKeywordDefinition_nonexistent_returnsEmpty() throws IOException {
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            assertTrue(storage.getKeywordDefinition("nonexistent").isEmpty());
-        }
-    }
-
-    @Test
-    void deleteKeywordDefinition() throws IOException {
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            KeywordDefinition def = KeywordDefinition.of("delete_me", "def", "ctx", "doc1");
-            storage.saveKeywordDefinition(def);
-            assertTrue(storage.containsKeyword("delete_me"));
-
-            storage.deleteKeywordDefinition("delete_me");
-            assertFalse(storage.containsKeyword("delete_me"));
-        }
-    }
-
-    @Test
-    void addInvertedIndexEntry() throws IOException {
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            storage.addInvertedIndexEntry("keyword1", "node1", 1.5);
-            List<String> nodes = storage.getNodesForKeyword("keyword1");
-            assertEquals(1, nodes.size());
-            assertTrue(nodes.contains("node1"));
-        }
-    }
-
-    @Test
-    void addInvertedIndexEntries_batch() throws IOException {
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            storage.addInvertedIndexEntries("keyword1", List.of("node1", "node2", "node3"));
-            List<String> nodes = storage.getNodesForKeyword("keyword1");
-            assertEquals(3, nodes.size());
-        }
-    }
-
-    @Test
-    void matchCandidates_returnsWeightedResults() throws IOException {
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            storage.addInvertedIndexEntry("zerovector", "node1", 1.0);
-            storage.addInvertedIndexEntry("knowledge", "node1", 0.5);
-
-            Map<String, Double> candidates = storage.matchCandidates("zerovector knowledge base");
-            assertFalse(candidates.isEmpty());
-            assertTrue(candidates.containsKey("node1"));
-        }
-    }
-
-    @Test
-    void matchCandidatesFromKeywords() throws IOException {
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            storage.addInvertedIndexEntry("test", "node1", 1.0);
-            storage.addInvertedIndexEntry("keyword", "node2", 2.0);
-
-            Map<String, Double> candidates = storage.matchCandidatesFromKeywords(List.of("test"));
-            assertEquals(1, candidates.size());
-            assertTrue(candidates.containsKey("node1"));
-        }
-    }
-
-    @Test
-    void persist_and_reload() throws IOException {
-        String dictPath = tempDir.resolve("persist.dict").toString();
-
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            DictionaryStorageConfig config = new DictionaryStorageConfig(dictPath);
             storage.initialize(config);
-            storage.saveKeywordDefinition(KeywordDefinition.of("persistent", "value", "ctx", "doc1"));
-            storage.persist();
+            KeywordDictionary dictionary = new KeywordDictionary();
+            dictionary.addKeywordDefinition(KeywordDefinition.of("ZeroVector", "A KB", "ctx", "doc1"));
+            dictionary.addEntry("zerovector", "node1", 1.5);
+            storage.save(dictionary);
         }
 
         try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            DictionaryStorageConfig config = new DictionaryStorageConfig(dictPath);
             storage.initialize(config);
-            var retrieved = storage.getKeywordDefinition("persistent");
-            assertTrue(retrieved.isPresent());
-            assertEquals("value", retrieved.get().definition());
+            KeywordDictionary loaded = storage.load();
+            assertTrue(loaded.containsKeyword("ZeroVector"));
+            assertEquals(1, loaded.getNodesForKeyword("zerovector").size());
+            assertEquals(1.5, loaded.getKeywordWeight("zerovector"), 0.001);
         }
     }
 
     @Test
-    void clear_removesAll() throws IOException {
+    void save_withoutFilePath_isNoop() {
         try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            storage.saveKeywordDefinition(KeywordDefinition.of("k", "d", "c", "doc1"));
-            storage.clear();
-            assertEquals(0, storage.size());
+            storage.initialize(new DictionaryStorageConfig());
+            assertDoesNotThrow(() -> storage.save(new KeywordDictionary()));
         }
     }
 
     @Test
-    void getAllKeywords_returnsAll() throws IOException {
+    void corruptedFile_failsLoudly() throws IOException {
+        Path file = tempDir.resolve("corrupt.json");
+        Files.writeString(file, "{not json");
+        DictionaryStorageConfig config = new DictionaryStorageConfig(file.toString());
+
         try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(createConfig());
-            storage.saveKeywordDefinitions(List.of(
-                KeywordDefinition.of("alpha", "d", "c", "doc1"),
-                KeywordDefinition.of("beta", "d", "c", "doc2")
-            ));
-            var allKeywords = storage.getAllKeywords();
-            assertEquals(2, allKeywords.size());
-            assertTrue(allKeywords.contains("alpha"));
-            assertTrue(allKeywords.contains("beta"));
+            storage.initialize(config);
+            assertThrows(StorageException.class, storage::load);
         }
-    }
-
-    @Test
-    void getStorageType_returnsLocalFile() {
-        LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage();
-        assertEquals("local-file", storage.getStorageType());
     }
 
     @Test
     void notInitialized_throwsException() {
         LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage();
-        assertThrows(StorageException.class, () -> storage.saveKeywordDefinition(
-            KeywordDefinition.of("k", "d", "c", "doc1")));
+        assertThrows(StorageException.class, storage::load);
+        assertThrows(StorageException.class, () -> storage.save(new KeywordDictionary()));
     }
 
     @Test
-    void initialize_withoutFilePath_createsEmptyDict() throws IOException {
-        try (LocalFileDictionaryStorage storage = new LocalFileDictionaryStorage()) {
-            storage.initialize(new DictionaryStorageConfig());
-            assertTrue(storage.isHealthy());
-            assertEquals(0, storage.size());
-        }
+    void getStorageType_returnsLocalFile() {
+        assertEquals("local-file", new LocalFileDictionaryStorage().getStorageType());
     }
 }

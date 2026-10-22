@@ -20,118 +20,57 @@ import cn.nexon.zerovector.core.exception.StorageException;
 import cn.nexon.zerovector.core.model.DocumentChunk;
 import cn.nexon.zerovector.core.storage.config.ChunkStorageConfig;
 
+import java.io.IOException;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * 文档分片存储接口
- * 
- * <p>第三方可以通过实现此接口来扩展存储介质，例如：
- * <ul>
- *   <li>Elasticsearch - 支持全文检索</li>
- *   <li>数据库 - 支持事务</li>
- *   <li>分布式存储 - 支持集群部署</li>
- * </ul>
- * 
- * <p>注意：语义树的路由导航依赖于高性能的随机读取，
- * 建议生产环境使用基于 mmap 的本地文件实现。
+ * 内联正文存储接口。
+ *
+ * <p>语义树只保存章节元数据；大文件原文由 {@code DocumentSourceStore} 按源文件区间
+ * 懒加载，不进入本接口。本接口只负责接口直传小文档的内联正文（默认 mmap）。
  */
 public interface ChunkStorage extends AutoCloseable {
 
-    /**
-     * 初始化存储
-     * 
-     * @param config 存储配置
-     * @throws StorageException 初始化失败
-     */
+    /** 初始化存储。实现必须支持重复调用（第二次为空操作）。 */
     void initialize(ChunkStorageConfig config) throws StorageException;
 
-    /**
-     * 保存文档分片
-     * 
-     * @param chunk 文档分片对象
-     * @throws StorageException 存储异常
-     */
+    /** 保存内联正文；{@code chunk.content()} 为空时只缓存元数据。 */
     void saveChunk(DocumentChunk chunk) throws StorageException;
 
-    /**
-     * 批量保存文档分片
-     * 
-     * @param chunks 文档分片集合
-     * @throws StorageException 存储异常
-     */
+    /** 批量保存正文。 */
     void saveChunks(Map<String, DocumentChunk> chunks) throws StorageException;
 
     /**
-     * 获取文档分片元数据
-     * 
-     * @param chunkId 分片ID
-     * @return 文档分片，不存在返回null
-     * @throws StorageException 存储异常
+     * 获取分片元数据；不存在返回 {@code null}。
+     * <p>语义树是分片元数据的权威来源；本方法只保证返回当前实现能提供的元数据
+     * （本地实现重启后可能只返回 id 占位），正文请使用 {@link #getChunkContent(String)}。
      */
     DocumentChunk getChunk(String chunkId) throws StorageException;
 
-    /**
-     * 获取文档分片内容
-     * 
-     * <p>对于基于文件路径的分片，需要从文件副本存储读取内容
-     * 
-     * @param chunkId 分片ID
-     * @return 分片内容
-     * @throws StorageException 存储异常
-     */
+    /** 获取分片正文；不存在返回 {@code null}。 */
     String getChunkContent(String chunkId) throws StorageException;
 
-    /**
-     * 删除文档分片
-     * 
-     * @param chunkId 分片ID
-     * @throws StorageException 存储异常
-     */
     void deleteChunk(String chunkId) throws StorageException;
 
-    /**
-     * 检查分片是否存在
-     * 
-     * @param chunkId 分片ID
-     * @return 是否存在
-     */
     boolean exists(String chunkId);
 
-    /**
-     * 获取所有分片ID
-     * 
-     * @return 分片ID集合
-     */
     Set<String> getAllChunkIds();
 
-    /**
-     * 批量获取分片
-     * 
-     * @param chunkIds 分片ID列表
-     * @return 分片映射
-     */
     Map<String, DocumentChunk> getChunks(Collection<String> chunkIds);
 
-    /**
-     * 清空所有分片
-     * 
-     * @throws StorageException 存储异常
-     */
+    /** 清空所有正文与元数据。 */
     void clear() throws StorageException;
 
-    /**
-     * 获取存储类型标识
-     * 
-     * @return 存储类型，如 "local-mmap", "elasticsearch", "mysql" 等
-     */
+    /** 将待持久化的索引/缓冲刷到磁盘。默认无操作。 */
+    default void flush() throws StorageException {
+    }
+
     String getStorageType();
 
-    /**
-     * 健康检查
-     * 
-     * @return 是否健康
-     */
     boolean isHealthy();
+
+    @Override
+    void close() throws IOException;
 }

@@ -47,8 +47,9 @@ public final class LLMPromptTemplates {
     public static String clusterDocumentChunks(List<String> chunks) {
         StringBuilder chunksBuilder = new StringBuilder();
         for (int i = 0; i < chunks.size(); i++) {
+            String chunk = chunks.get(i) == null ? "" : chunks.get(i);
             chunksBuilder.append("[").append(i).append("] ")
-                    .append(chunks.get(i).substring(0, Math.min(200, chunks.get(i).length())))
+                    .append(chunk, 0, Math.min(200, chunk.length()))
                     .append("\n");
         }
 
@@ -146,10 +147,12 @@ public final class LLMPromptTemplates {
      * 文档分块理解。
      * <p>返回 {@code {summary, keywordDefinitions, entities, exampleQuestions}} 结构。
      */
-    public static String comprehendChunk(String context, int chunkIndex, int totalChunks) {
+    public static String comprehendChunk(String context, String chunk, int chunkIndex, int totalChunks) {
+        String contextBlock = context == null || context.isBlank() ? "" : context + "\n\n";
         return """
             你是知识库文档解析助手。请分析以下文档内容（第%s部分，共%s部分），提取结果将用于构建检索索引。
 
+            %s当前内容：
             %s
 
             请提取并只返回一个 JSON 对象（不要用 markdown 代码块或多余文字包裹），字段如下：
@@ -167,7 +170,7 @@ public final class LLMPromptTemplates {
               "entities": ["实体1", "实体2"],
               "exampleQuestions": ["问题1", "问题2"]
             }
-            """.formatted(chunkIndex, totalChunks, context);
+            """.formatted(chunkIndex, totalChunks, contextBlock, chunk);
     }
 
     /**

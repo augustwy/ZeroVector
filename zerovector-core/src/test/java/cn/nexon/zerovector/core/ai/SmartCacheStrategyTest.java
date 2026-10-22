@@ -146,7 +146,9 @@ class SmartCacheStrategyTest {
     @Test
     void requestType_hasAllExpectedValues() {
         SmartCacheStrategy.RequestType[] types = SmartCacheStrategy.RequestType.values();
-        assertEquals(8, types.length);
+        assertEquals(9, types.length);
+        assertEquals(CacheConfig.disabled(),
+            SmartCacheStrategy.getConfigForType(SmartCacheStrategy.RequestType.ANSWER_QUESTION));
     }
 
     @Test
