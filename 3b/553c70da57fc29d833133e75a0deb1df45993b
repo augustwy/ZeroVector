@@ -1,0 +1,42 @@
+zerovector-core/src/test/java/cn/nexon/zerovector/core/ai/LLMPromptTemplatesTest.java
+  s_5e30cbccaccfd4::t_5cbb4fc8df5f6b 78,82
+zerovector-core/src/test/java/cn/nexon/zerovector/core/ai/SmartCacheStrategyTest.java
+  s_5e30cbccaccfd4::t_9eb9000def4f95 149-151
+zerovector-core/src/test/java/cn/nexon/zerovector/core/index/KeywordDictionaryTest.java
+  s_5e30cbccaccfd4::t_5962384e9df10a 215,221
+zerovector-core/src/test/java/cn/nexon/zerovector/core/model/ModelTests.java
+  s_5e30cbccaccfd4::t_00310c76f7b377 101,105,109-110,113-114,119-120,183-188,255-256,258
+zerovector-core/src/test/java/cn/nexon/zerovector/core/storage/MMapDocumentStoreTest.java
+  s_5e30cbccaccfd4::t_c67a3c4ff604b3 130-135,142-145,147-148,150-153,159-162,164-166,196-205
+zerovector-core/src/test/java/cn/nexon/zerovector/core/storage/ShardedTreeStorageTest.java
+  s_5e30cbccaccfd4::t_fcf3177b8a7918 75-77,153-154
+zerovector-core/src/test/java/cn/nexon/zerovector/core/storage/local/LocalFileChunkStorageTest.java
+  s_5e30cbccaccfd4::t_da519648b403cd 40-42,64,69-70,72-75,77-81,90,98-100,103-104,109,117,130,160-161,174,177-179,184,186-187
+zerovector-core/src/test/java/cn/nexon/zerovector/core/storage/local/LocalFileDictionaryStorageTest.java
+  s_5e30cbccaccfd4::t_99a2f1f201f4a6 20,27,38,42,50,53,58-59,62-65,70-73,78,80-81,86-90,92-93,100-101,105-106
+zerovector-spring-boot-example/src/main/java/cn/nexon/zerovector/springboot/example/controller/CacheController.java
+  s_5e30cbccaccfd4::t_ab8df4354d5f72 209
+zerovector-spring-boot-example/src/main/java/cn/nexon/zerovector/springboot/example/util/DocumentTextExtractor.java
+  s_5e30cbccaccfd4::t_c6fe7080a471d5 17,19-24,27-29,31,33,36-44,47-51
+zerovector-spring-boot-starter/src/main/java/cn/nexon/zerovector/springboot/SearchResult.java
+  s_5e30cbccaccfd4::t_a2b524a0d1b8d0 26,30,32,34,36,39,42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.35",
+  "base_commit_sha": "3b553c70da57fc29d833133e75a0deb1df45993b",
+  "prompts": {},
+  "sessions": {
+    "s_5e30cbccaccfd4": {
+      "agent_id": {
+        "tool": "qoder",
+        "id": "075f1f20-4655-4721-b1ed-daea027581f9",
+        "model": "unknown"
+      },
+      "human_author": "葛未央 <geweiyang@sdpjw.com>",
+      "custom_attributes": {
+        "internal_commit_event_allowlist": "codeup.aliyun.com,codeup-*"
+      }
+    }
+  }
+}
