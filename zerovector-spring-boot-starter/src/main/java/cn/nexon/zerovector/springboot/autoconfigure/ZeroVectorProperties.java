@@ -38,8 +38,6 @@ public class ZeroVectorProperties {
     @NotBlank
     private String storageBasePath = "./data/knowledge_bases";
 
-    private boolean useShardedStorage = true;
-
     private int shardSize = ConcurrencyProperties.DEFAULT_SHARD_SIZE;
 
     private Model model = new Model("gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini", 0.7, -1);
@@ -73,14 +71,6 @@ public class ZeroVectorProperties {
 
     public void setStorageBasePath(String storageBasePath) {
         this.storageBasePath = storageBasePath;
-    }
-
-    public boolean isUseShardedStorage() {
-        return useShardedStorage;
-    }
-
-    public void setUseShardedStorage(boolean useShardedStorage) {
-        this.useShardedStorage = useShardedStorage;
     }
 
     public int getShardSize() {

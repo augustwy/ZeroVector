@@ -16,14 +16,6 @@
 
 package cn.nexon.zerovector.core.model;
 
-import cn.nexon.zerovector.core.util.JsonUtils;
-
-import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.Map;
 
 /**
@@ -49,39 +41,6 @@ public record SemanticTree(
 
     public DocumentChunk getChunk(String id) {
         return chunks.get(id);
-    }
-
-    /** 原子保存：先写临时文件再替换。 */
-    public void saveToFile(String filePath) throws IOException {
-        Path path = Paths.get(filePath);
-        Path parent = path.toAbsolutePath().getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-
-        Path tempPath = Paths.get(filePath + ".tmp");
-        Files.writeString(tempPath, JsonUtils.toJson(this));
-        try {
-            Files.move(tempPath, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tempPath, path, StandardCopyOption.REPLACE_EXISTING);
-        }
-    }
-
-    public static SemanticTree loadFromFile(String filePath) throws IOException {
-        Path path = Paths.get(filePath);
-        if (!Files.exists(path)) {
-            return null;
-        }
-        try {
-            SemanticTree tree = JsonUtils.parseJson(Files.readString(path), SemanticTree.class);
-            if (tree == null) {
-                throw new IOException("Empty semantic tree file: " + filePath);
-            }
-            return tree;
-        } catch (RuntimeException e) {
-            throw new IOException("Failed to deserialize semantic tree: " + filePath, e);
-        }
     }
 
     public static SemanticTree empty() {

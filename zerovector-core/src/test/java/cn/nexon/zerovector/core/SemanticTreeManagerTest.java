@@ -121,7 +121,7 @@ class SemanticTreeManagerTest {
         LLMProvider llm = new ScriptedLLM();
         try (SemanticTreeManager manager = new SemanticTreeManager(
                 llm, new DocumentComprehender(llm, 4000, null), tempDir.resolve("kb-async"),
-                true, 10, props, null)) {
+                10, props, null)) {
             DocumentUploadResult result = manager.addDocumentAsync(file)
                     .get(10, java.util.concurrent.TimeUnit.SECONDS);
             assertTrue(result.success());
@@ -273,13 +273,13 @@ class SemanticTreeManagerTest {
     private SemanticTreeManager manager(Path path, int chunkChars, long threshold) {
         DocumentComprehender comprehender = new DocumentComprehender(new ScriptedLLM(), chunkChars);
         return new SemanticTreeManager(new ScriptedLLM(), comprehender, path,
-                true, 10, threshold, new ConcurrencyProperties(), null);
+                10, threshold, new ConcurrencyProperties(), null);
     }
 
     private SemanticTreeManager manager(Path path, int chunkChars) {
         DocumentComprehender comprehender = new DocumentComprehender(new ScriptedLLM(), chunkChars);
         return new SemanticTreeManager(new ScriptedLLM(), comprehender, path,
-                true, 10, new ConcurrencyProperties(), null);
+                10, new ConcurrencyProperties(), null);
     }
 
     private Path write(String name, String content) throws Exception {

@@ -10,7 +10,6 @@ spring:
 zerovector:
   enabled: true
   storage-base-path: ./data/knowledge_bases
-  use-sharded-storage: true
   shard-size: 100
 
   model:

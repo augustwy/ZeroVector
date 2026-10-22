@@ -98,7 +98,6 @@ public class SemanticTreeManager implements AutoCloseable {
 
     private static final Logger logger = LoggerFactory.getLogger(SemanticTreeManager.class);
 
-    private static final String TREE_FILE = "semantic-tree.json";
     private static final String TREE_SHARD_DIR = "semantic-tree.d";
     private static final String CHUNKS_BASE = "chunks";
     private static final String DICTIONARY_FILE = "dictionary.json";
@@ -119,9 +118,7 @@ public class SemanticTreeManager implements AutoCloseable {
     private volatile KeywordDictionary dictionary;
 
     private final Path storagePath;
-    private final Path treeFile;
     private final ShardedTreeStorage shardedTreeStorage;
-    private final boolean useShardedStorage;
     private final long chapterSplitThresholdChars;
 
     private final ReentrantLock writeLock = new ReentrantLock();
@@ -157,40 +154,40 @@ public class SemanticTreeManager implements AutoCloseable {
     }
 
     public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
-                               Path storagePath, boolean useShardedStorage, int shardSize,
+                               Path storagePath, int shardSize,
                                ConcurrencyProperties concurrencyProperties, HookExecutor hookExecutor) {
         this(llmProvider, documentComprehender, new LocalFileChunkStorage(), new LocalFileDictionaryStorage(),
-                storagePath, useShardedStorage, shardSize, concurrencyProperties, hookExecutor);
+                storagePath, shardSize, concurrencyProperties, hookExecutor);
     }
 
     public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
-                               Path storagePath, boolean useShardedStorage,
+                               Path storagePath,
                                ConcurrencyProperties concurrencyProperties) {
-        this(llmProvider, documentComprehender, storagePath, useShardedStorage,
+        this(llmProvider, documentComprehender, storagePath,
                 ConcurrencyProperties.DEFAULT_SHARD_SIZE, concurrencyProperties, new DefaultHookExecutor());
     }
 
     public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
                                ChunkStorage chunkStorage, DictionaryStorage dictionaryStorage,
-                               Path storagePath, boolean useShardedStorage, int shardSize,
+                               Path storagePath, int shardSize,
                                ConcurrencyProperties concurrencyProperties, HookExecutor hookExecutor) {
         this(llmProvider, documentComprehender, chunkStorage, dictionaryStorage,
-                storagePath, useShardedStorage, shardSize,
+                storagePath, shardSize,
                 DEFAULT_CHAPTER_SPLIT_THRESHOLD_CHARS, concurrencyProperties, hookExecutor);
     }
 
     public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
-                               Path storagePath, boolean useShardedStorage, int shardSize,
+                               Path storagePath, int shardSize,
                                long chapterSplitThresholdChars,
                                ConcurrencyProperties concurrencyProperties, HookExecutor hookExecutor) {
         this(llmProvider, documentComprehender, new LocalFileChunkStorage(), new LocalFileDictionaryStorage(),
-                storagePath, useShardedStorage, shardSize, chapterSplitThresholdChars,
+                storagePath, shardSize, chapterSplitThresholdChars,
                 concurrencyProperties, hookExecutor);
     }
 
     public SemanticTreeManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
                                ChunkStorage chunkStorage, DictionaryStorage dictionaryStorage,
-                               Path storagePath, boolean useShardedStorage, int shardSize,
+                               Path storagePath, int shardSize,
                                long chapterSplitThresholdChars,
                                ConcurrencyProperties concurrencyProperties, HookExecutor hookExecutor) {
         this.llmProvider = Objects.requireNonNull(llmProvider, "llmProvider");
@@ -200,8 +197,6 @@ public class SemanticTreeManager implements AutoCloseable {
         this.chunkStorage = Objects.requireNonNull(chunkStorage, "chunkStorage");
         this.dictionaryStorage = Objects.requireNonNull(dictionaryStorage, "dictionaryStorage");
         this.storagePath = Objects.requireNonNull(storagePath, "storagePath").toAbsolutePath();
-        this.treeFile = this.storagePath.resolve(TREE_FILE);
-        this.useShardedStorage = useShardedStorage;
         this.chapterSplitThresholdChars = Math.max(1_000, chapterSplitThresholdChars);
         this.executor = LLMExecutors.create(concurrencyProperties);
 
@@ -215,14 +210,9 @@ public class SemanticTreeManager implements AutoCloseable {
                     this.storagePath.resolve(DICTIONARY_FILE).toString()));
             this.dictionary = dictionaryStorage.load();
 
-            if (useShardedStorage) {
-                this.shardedTreeStorage = new ShardedTreeStorage(
-                        this.storagePath.resolve(TREE_SHARD_DIR).toString(), shardSize);
-                loadTreeState(shardedTreeStorage.loadTree());
-            } else {
-                this.shardedTreeStorage = null;
-                loadTreeState(SemanticTree.loadFromFile(treeFile.toString()));
-            }
+            this.shardedTreeStorage = new ShardedTreeStorage(
+                    this.storagePath.resolve(TREE_SHARD_DIR).toString(), shardSize);
+            loadTreeState(shardedTreeStorage.loadTree());
             cleanupSourceCopies(currentTree());
         } catch (IOException e) {
             asyncExecutor.close();
@@ -940,11 +930,7 @@ public class SemanticTreeManager implements AutoCloseable {
         try {
             chunkStorage.flush();
             dictionaryStorage.save(dictionaryToSave);
-            if (useShardedStorage) {
-                shardedTreeStorage.saveTree(tree);
-            } else {
-                tree.saveToFile(treeFile.toString());
-            }
+            shardedTreeStorage.saveTree(tree);
             logger.debug("语义树已保存: {}", storagePath);
         } catch (IOException e) {
             throw new StorageException(storagePath.toString(), "saveTree", e);
@@ -957,10 +943,6 @@ public class SemanticTreeManager implements AutoCloseable {
 
     public boolean isTreeLoaded() {
         return currentTree() != null;
-    }
-
-    public boolean isUsingShardedStorage() {
-        return useShardedStorage;
     }
 
     public ChunkStorage getChunkStorage() {

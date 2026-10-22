@@ -41,7 +41,7 @@ class KnowledgeBaseManagerTest {
 
         try (KnowledgeBaseManager manager = new KnowledgeBaseManager(
                 llm, new DocumentComprehender(llm, 1000, null),
-                new ConcurrencyProperties(), base.toString(), true, 10, null)) {
+                new ConcurrencyProperties(), base.toString(), 10, null)) {
             manager.initialize();
             manager.createKnowledgeBase("empty");
             assertTrue(manager.exists("empty"));
@@ -49,7 +49,7 @@ class KnowledgeBaseManagerTest {
 
         try (KnowledgeBaseManager manager = new KnowledgeBaseManager(
                 new NoopLLM(), new DocumentComprehender(new NoopLLM(), 1000, null),
-                new ConcurrencyProperties(), base.toString(), true, 10, null)) {
+                new ConcurrencyProperties(), base.toString(), 10, null)) {
             manager.initialize();
             assertTrue(manager.exists("default"));
             assertTrue(manager.exists("empty"));
@@ -63,7 +63,7 @@ class KnowledgeBaseManagerTest {
         LLMProvider llm = new NoopLLM();
         try (KnowledgeBaseManager manager = new KnowledgeBaseManager(
                 llm, new DocumentComprehender(llm, 1000, null),
-                new ConcurrencyProperties(), base.toString(), true, 10, null)) {
+                new ConcurrencyProperties(), base.toString(), 10, null)) {
             manager.initialize();
             assertThrows(IllegalArgumentException.class, () -> manager.deleteKnowledgeBase("default"));
         }

@@ -249,7 +249,6 @@ public class ZeroVectorAutoConfiguration {
                 documentComprehender,
                 properties.getConcurrency(),
                 properties.getStorageBasePath(),
-                properties.isUseShardedStorage(),
                 properties.getShardSize(),
                 properties.getLlmContext().getChapterSplitThresholdChars(),
                 hookExecutor);

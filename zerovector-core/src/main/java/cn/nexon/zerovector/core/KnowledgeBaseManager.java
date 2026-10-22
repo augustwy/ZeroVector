@@ -47,7 +47,6 @@ public final class KnowledgeBaseManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(KnowledgeBaseManager.class);
     private static final String DEFAULT_KNOWLEDGE_BASE = "default";
     private static final String NAME_PATTERN = "^[a-zA-Z0-9_-]+$";
-    private static final String TREE_FILE = "semantic-tree.json";
     private static final String TREE_DIR = "semantic-tree.d";
     private static final String MARKER_FILE = ".zerovector-kb";
 
@@ -57,7 +56,6 @@ public final class KnowledgeBaseManager implements AutoCloseable {
     private final ConcurrencyProperties concurrencyProperties;
     private final HookExecutor hookExecutor;
     private final Path baseStoragePath;
-    private final boolean useShardedStorage;
     private final int shardSize;
     private final long chapterSplitThresholdChars;
 
@@ -67,21 +65,20 @@ public final class KnowledgeBaseManager implements AutoCloseable {
 
     public KnowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
                                 ConcurrencyProperties concurrencyProperties, String baseStoragePath,
-                                boolean useShardedStorage, int shardSize, HookExecutor hookExecutor) {
+                                int shardSize, HookExecutor hookExecutor) {
         this(llmProvider, documentComprehender, concurrencyProperties, baseStoragePath,
-                useShardedStorage, shardSize, 100_000L, hookExecutor);
+                shardSize, 100_000L, hookExecutor);
     }
 
     public KnowledgeBaseManager(LLMProvider llmProvider, DocumentComprehender documentComprehender,
                                 ConcurrencyProperties concurrencyProperties, String baseStoragePath,
-                                boolean useShardedStorage, int shardSize,
+                                int shardSize,
                                 long chapterSplitThresholdChars, HookExecutor hookExecutor) {
         this.llmProvider = Objects.requireNonNull(llmProvider, "llmProvider");
         this.documentComprehender = Objects.requireNonNull(documentComprehender, "documentComprehender");
         this.concurrencyProperties = Objects.requireNonNull(concurrencyProperties, "concurrencyProperties");
         this.baseStoragePath = Paths.get(Objects.requireNonNull(baseStoragePath, "baseStoragePath"))
                 .toAbsolutePath();
-        this.useShardedStorage = useShardedStorage;
         this.shardSize = shardSize;
         this.chapterSplitThresholdChars = Math.max(1_000L, chapterSplitThresholdChars);
         this.hookExecutor = Objects.requireNonNullElseGet(hookExecutor, DefaultHookExecutor::new);
@@ -91,7 +88,7 @@ public final class KnowledgeBaseManager implements AutoCloseable {
                                 ConcurrencyProperties concurrencyProperties, String baseStoragePath,
                                 HookExecutor hookExecutor) {
         this(llmProvider, documentComprehender, concurrencyProperties, baseStoragePath,
-                true, ConcurrencyProperties.DEFAULT_SHARD_SIZE, hookExecutor);
+                ConcurrencyProperties.DEFAULT_SHARD_SIZE, hookExecutor);
     }
 
     /** 初始化：加载已有知识库，不存在时创建默认库。重复调用为空操作。 */
@@ -145,16 +142,15 @@ public final class KnowledgeBaseManager implements AutoCloseable {
         }
     }
 
-    /** 目录必须包含 marker / 树文件 / 分片元数据，避免把上传目录等误识别为知识库。 */
+    /** 目录必须包含 marker / 分片元数据，避免把上传目录等误识别为知识库。 */
     private boolean isKnowledgeBaseDirectory(Path path) {
         return Files.isRegularFile(path.resolve(MARKER_FILE))
-                || Files.isRegularFile(path.resolve(TREE_FILE))
                 || Files.isRegularFile(path.resolve(TREE_DIR).resolve("metadata.json"));
     }
 
     private SemanticTreeManager createManager(String name, Path path) {
         SemanticTreeManager manager = new SemanticTreeManager(
-                llmProvider, documentComprehender, path, useShardedStorage, shardSize,
+                llmProvider, documentComprehender, path, shardSize,
                 chapterSplitThresholdChars, concurrencyProperties, hookExecutor);
         try {
             Files.writeString(path.resolve(MARKER_FILE), "zerovector\n");

@@ -102,7 +102,6 @@ export AI_OPENAI_BASE_URL=https://api.openai.com   # 可选，兼容三方 API
 zerovector:
   enabled: true
   storage-base-path: ./data/knowledge_bases
-  use-sharded-storage: true
   shard-size: 100
 
   model:
